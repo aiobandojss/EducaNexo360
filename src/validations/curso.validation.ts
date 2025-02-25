@@ -22,21 +22,9 @@ export const crearCursoValidation = [
     .notEmpty()
     .withMessage('El director de grupo es requerido')
     .custom((value) => {
-      if (!mongoose.Types.ObjectId.isValid(value)) {
-        throw new Error('ID de director de grupo inválido');
-      }
-      return true;
-    }),
-
-  body('estudiantes')
-    .optional()
-    .isArray()
-    .withMessage('Estudiantes debe ser un array')
-    .custom((value) => {
-      if (!value.every((id: string) => mongoose.Types.ObjectId.isValid(id))) {
-        throw new Error('ID de estudiante inválido');
-      }
-      return true;
+      return (
+        mongoose.Types.ObjectId.isValid(value) || new Error('ID de director de grupo inválido')
+      );
     }),
 ];
 
@@ -51,16 +39,19 @@ export const actualizarCursoValidation = [
 
   body('nivel').optional().trim().notEmpty().withMessage('El nivel no puede estar vacío'),
 
+  body('año_academico')
+    .optional()
+    .trim()
+    .matches(/^\d{4}$/)
+    .withMessage('El año académico debe tener formato YYYY'),
+
   body('director_grupo')
     .optional()
     .custom((value) => {
-      if (!mongoose.Types.ObjectId.isValid(value)) {
-        throw new Error('ID de director de grupo inválido');
-      }
-      return true;
+      return (
+        mongoose.Types.ObjectId.isValid(value) || new Error('ID de director de grupo inválido')
+      );
     }),
-
-  body('estado').optional().isIn(['ACTIVO', 'INACTIVO']).withMessage('Estado inválido'),
 ];
 
 export const agregarEstudiantesValidation = [
@@ -69,9 +60,10 @@ export const agregarEstudiantesValidation = [
     .withMessage('Estudiantes debe ser un array')
     .notEmpty()
     .withMessage('Debe proporcionar al menos un estudiante')
-    .custom((value) => {
-      if (!value.every((id: string) => mongoose.Types.ObjectId.isValid(id))) {
-        throw new Error('ID de estudiante inválido');
+    .custom((estudiantes) => {
+      const todosValidos = estudiantes.every((id: string) => mongoose.Types.ObjectId.isValid(id));
+      if (!todosValidos) {
+        throw new Error('Uno o más IDs de estudiantes son inválidos');
       }
       return true;
     }),
@@ -83,9 +75,10 @@ export const removerEstudiantesValidation = [
     .withMessage('Estudiantes debe ser un array')
     .notEmpty()
     .withMessage('Debe proporcionar al menos un estudiante')
-    .custom((value) => {
-      if (!value.every((id: string) => mongoose.Types.ObjectId.isValid(id))) {
-        throw new Error('ID de estudiante inválido');
+    .custom((estudiantes) => {
+      const todosValidos = estudiantes.every((id: string) => mongoose.Types.ObjectId.isValid(id));
+      if (!todosValidos) {
+        throw new Error('Uno o más IDs de estudiantes son inválidos');
       }
       return true;
     }),

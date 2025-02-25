@@ -1,21 +1,10 @@
 import mongoose, { Schema } from 'mongoose';
 import { ICalificacionDocument, ICalificacionLogro } from '../interfaces/ICalificacion';
 
-interface IPeriodo {
-  numero: number;
-  logros: {
-    _id: mongoose.Types.ObjectId;
-    porcentaje: number;
-  }[];
-}
-
-interface IAsignaturaDocument extends mongoose.Document {
-  periodos: IPeriodo[];
-}
-
 const CalificacionLogroSchema = new Schema({
   logroId: {
     type: Schema.Types.ObjectId,
+    ref: 'Logro',
     required: [true, 'El logro es requerido'],
   },
   calificacion: {
@@ -82,44 +71,41 @@ const CalificacionSchema = new Schema(
 // Middleware para calcular el promedio antes de guardar
 CalificacionSchema.pre('save', async function (next) {
   try {
-    const calificacion = this as unknown as ICalificacionDocument;
+    const calificacion = this as ICalificacionDocument;
 
     if (
       Array.isArray(calificacion.calificaciones_logros) &&
       calificacion.calificaciones_logros.length > 0
     ) {
-      const asignatura = await mongoose
-        .model<IAsignaturaDocument>('Asignatura')
-        .findById(calificacion.asignaturaId);
+      // Obtener todos los logros referenciados
+      const Logro = mongoose.model('Logro');
+      const logrosIds = calificacion.calificaciones_logros.map((cal) => cal.logroId);
 
-      if (!asignatura) {
-        throw new Error('Asignatura no encontrada');
-      }
+      const logros = await Logro.find({
+        _id: { $in: logrosIds },
+        asignaturaId: calificacion.asignaturaId,
+        periodo: calificacion.periodo,
+        año_academico: calificacion.año_academico,
+      });
 
-      const periodoActual = asignatura.periodos.find(
-        (p: IPeriodo) => p.numero === calificacion.periodo,
-      );
-
-      if (!periodoActual) {
-        throw new Error('Periodo no encontrado');
+      if (logros.length === 0) {
+        throw new Error('No se encontraron logros válidos para esta calificación');
       }
 
       let sumaPonderada = 0;
       let pesoTotal = 0;
 
-      calificacion.calificaciones_logros.forEach((calificacionLogro: ICalificacionLogro) => {
-        const logro = periodoActual.logros.find(
-          (l) => l._id.toString() === calificacionLogro.logroId.toString(),
-        );
+      calificacion.calificaciones_logros.forEach((calificacionLogro) => {
+        const logro = logros.find((l) => l._id.toString() === calificacionLogro.logroId.toString());
 
         if (logro) {
-          sumaPonderada += calificacionLogro.calificacion * logro.porcentaje;
+          sumaPonderada += calificacionLogro.calificacion * (logro.porcentaje / 100);
           pesoTotal += logro.porcentaje;
         }
       });
 
       if (pesoTotal > 0) {
-        calificacion.promedio_periodo = Number((sumaPonderada / pesoTotal).toFixed(2));
+        calificacion.promedio_periodo = Number(((sumaPonderada * 100) / pesoTotal).toFixed(2));
       }
     }
     next();

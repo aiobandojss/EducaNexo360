@@ -14,6 +14,17 @@ export interface IUsuarioBase {
     direccion?: string;
     foto?: string;
   };
+  info_academica?: {
+    grado?: string;
+    grupo?: string;
+    codigo_estudiante?: string;
+    estudiantes_asociados?: Types.ObjectId[]; // Para padres
+    asignaturas_asignadas?: {
+      // Para docentes
+      asignaturaId: Types.ObjectId;
+      cursoId: Types.ObjectId;
+    }[];
+  };
 }
 
 export interface IUsuario extends IUsuarioBase, Document {

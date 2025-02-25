@@ -1,5 +1,4 @@
 import mongoose, { Schema } from 'mongoose';
-import { IEscuela } from '../interfaces/IEscuela';
 
 const EscuelaSchema: Schema = new Schema(
   {
@@ -24,6 +23,11 @@ const EscuelaSchema: Schema = new Schema(
       unique: true,
       lowercase: true,
       trim: true,
+    },
+    estado: {
+      type: String,
+      enum: ['ACTIVO', 'INACTIVO'],
+      default: 'ACTIVO',
     },
     configuracion: {
       periodos_academicos: {
@@ -76,8 +80,10 @@ const EscuelaSchema: Schema = new Schema(
   },
 );
 
-// Índices para optimizar búsquedas
-EscuelaSchema.index({ nombre: 1 });
+// Índices
 EscuelaSchema.index({ email: 1 }, { unique: true });
+EscuelaSchema.index({ estado: 1 });
 
-export default mongoose.model<IEscuela>('Escuela', EscuelaSchema);
+const Escuela = mongoose.model('Escuela', EscuelaSchema);
+
+export default Escuela;

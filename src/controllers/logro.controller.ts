@@ -1,5 +1,7 @@
+// src/controllers/logro.controller.ts
+
 import { Request, Response, NextFunction } from 'express';
-import Curso from '../models/curso.model';
+import Logro from '../models/logro.model';
 import ApiError from '../utils/ApiError';
 
 interface RequestWithUser extends Request {
@@ -14,24 +16,24 @@ interface RequestWithUser extends Request {
   };
 }
 
-class CursoController {
+class LogroController {
   async crear(req: RequestWithUser, res: Response, next: NextFunction) {
     try {
       if (!req.user) {
         throw new ApiError(401, 'No autorizado');
       }
 
-      const cursoData = {
+      const logroData = {
         ...req.body,
         escuelaId: req.user.escuelaId,
       };
 
-      const curso = await Curso.create(cursoData);
-      await curso.populate(['director_grupo', 'estudiantes']);
+      const logro = await Logro.create(logroData);
+      await logro.populate(['asignaturaId', 'cursoId']);
 
       res.status(201).json({
         success: true,
-        data: curso,
+        data: logro,
       });
     } catch (error) {
       next(error);
@@ -44,24 +46,21 @@ class CursoController {
         throw new ApiError(401, 'No autorizado');
       }
 
-      const { año_academico, estado } = req.query;
+      const { asignaturaId, periodo, año_academico, estado } = req.query;
       const query: any = { escuelaId: req.user.escuelaId };
 
-      if (año_academico) {
-        query.año_academico = año_academico;
-      }
+      if (asignaturaId) query.asignaturaId = asignaturaId;
+      if (periodo) query.periodo = periodo;
+      if (año_academico) query.año_academico = año_academico;
+      if (estado) query.estado = estado;
 
-      if (estado) {
-        query.estado = estado;
-      }
-
-      const cursos = await Curso.find(query)
-        .populate(['director_grupo', 'estudiantes'])
-        .sort({ nombre: 1 });
+      const logros = await Logro.find(query)
+        .populate(['asignaturaId', 'cursoId'])
+        .sort({ createdAt: -1 });
 
       res.json({
         success: true,
-        data: cursos,
+        data: logros,
       });
     } catch (error) {
       next(error);
@@ -74,18 +73,18 @@ class CursoController {
         throw new ApiError(401, 'No autorizado');
       }
 
-      const curso = await Curso.findOne({
+      const logro = await Logro.findOne({
         _id: req.params.id,
         escuelaId: req.user.escuelaId,
-      }).populate(['director_grupo', 'estudiantes']);
+      }).populate(['asignaturaId', 'cursoId']);
 
-      if (!curso) {
-        throw new ApiError(404, 'Curso no encontrado');
+      if (!logro) {
+        throw new ApiError(404, 'Logro no encontrado');
       }
 
       res.json({
         success: true,
-        data: curso,
+        data: logro,
       });
     } catch (error) {
       next(error);
@@ -98,22 +97,22 @@ class CursoController {
         throw new ApiError(401, 'No autorizado');
       }
 
-      const curso = await Curso.findOneAndUpdate(
+      const logro = await Logro.findOneAndUpdate(
         {
           _id: req.params.id,
           escuelaId: req.user.escuelaId,
         },
         req.body,
         { new: true, runValidators: true },
-      ).populate(['director_grupo', 'estudiantes']);
+      ).populate(['asignaturaId', 'cursoId']);
 
-      if (!curso) {
-        throw new ApiError(404, 'Curso no encontrado');
+      if (!logro) {
+        throw new ApiError(404, 'Logro no encontrado');
       }
 
       res.json({
         success: true,
-        data: curso,
+        data: logro,
       });
     } catch (error) {
       next(error);
@@ -126,7 +125,7 @@ class CursoController {
         throw new ApiError(401, 'No autorizado');
       }
 
-      const curso = await Curso.findOneAndUpdate(
+      const logro = await Logro.findOneAndUpdate(
         {
           _id: req.params.id,
           escuelaId: req.user.escuelaId,
@@ -135,73 +134,39 @@ class CursoController {
         { new: true },
       );
 
-      if (!curso) {
-        throw new ApiError(404, 'Curso no encontrado');
+      if (!logro) {
+        throw new ApiError(404, 'Logro no encontrado');
       }
 
       res.json({
         success: true,
-        message: 'Curso desactivado exitosamente',
+        message: 'Logro desactivado exitosamente',
       });
     } catch (error) {
       next(error);
     }
   }
 
-  async agregarEstudiantes(req: RequestWithUser, res: Response, next: NextFunction) {
+  async obtenerLogrosAsignatura(req: RequestWithUser, res: Response, next: NextFunction) {
     try {
       if (!req.user) {
         throw new ApiError(401, 'No autorizado');
       }
 
-      const { estudiantes } = req.body;
+      const { asignaturaId } = req.params;
+      const { periodo, año_academico } = req.query;
 
-      const curso = await Curso.findOneAndUpdate(
-        {
-          _id: req.params.id,
-          escuelaId: req.user.escuelaId,
-        },
-        { $addToSet: { estudiantes: { $each: estudiantes } } },
-        { new: true },
-      ).populate(['director_grupo', 'estudiantes']);
-
-      if (!curso) {
-        throw new ApiError(404, 'Curso no encontrado');
-      }
+      const logros = await Logro.find({
+        asignaturaId,
+        escuelaId: req.user.escuelaId,
+        periodo: periodo || { $exists: true },
+        año_academico: año_academico || { $exists: true },
+        estado: 'ACTIVO',
+      }).populate(['asignaturaId', 'cursoId']);
 
       res.json({
         success: true,
-        data: curso,
-      });
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  async removerEstudiantes(req: RequestWithUser, res: Response, next: NextFunction) {
-    try {
-      if (!req.user) {
-        throw new ApiError(401, 'No autorizado');
-      }
-
-      const { estudiantes } = req.body;
-
-      const curso = await Curso.findOneAndUpdate(
-        {
-          _id: req.params.id,
-          escuelaId: req.user.escuelaId,
-        },
-        { $pullAll: { estudiantes } },
-        { new: true },
-      ).populate(['director_grupo', 'estudiantes']);
-
-      if (!curso) {
-        throw new ApiError(404, 'Curso no encontrado');
-      }
-
-      res.json({
-        success: true,
-        data: curso,
+        data: logros,
       });
     } catch (error) {
       next(error);
@@ -209,4 +174,4 @@ class CursoController {
   }
 }
 
-export default new CursoController();
+export default new LogroController();

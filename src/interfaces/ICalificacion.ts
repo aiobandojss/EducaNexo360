@@ -5,6 +5,13 @@ export interface ICalificacionLogro {
   calificacion: number;
   observacion?: string;
   fecha_calificacion: Date;
+  tipo_logro?: 'COGNITIVO' | 'PROCEDIMENTAL' | 'ACTITUDINAL';
+  recuperacion?: {
+    fecha: Date;
+    calificacion_anterior: number;
+    calificacion_nueva: number;
+    observacion: string;
+  };
 }
 
 export interface ICalificacionDocument extends Document {

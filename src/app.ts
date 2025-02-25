@@ -8,6 +8,12 @@ import authRoutes from './routes/auth.routes';
 import escuelaRoutes from './routes/escuela.routes';
 import usuarioRoutes from './routes/usuario.routes';
 import ApiError from './utils/ApiError';
+import cursoRoutes from './routes/curso.routes';
+import asignaturaRoutes from './routes/asignatura.routes';
+import logroRoutes from './routes/logro.routes';
+import academicRoutes from './routes/academic.routes';
+import calificacionRoutes from './routes/calificacion.routes';
+import boletinRoutes from './routes/boletin.routes';
 
 // Configuración de variables de entorno
 dotenv.config();
@@ -24,6 +30,12 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api/auth', authRoutes);
 app.use('/api/escuelas', escuelaRoutes);
 app.use('/api/usuarios', usuarioRoutes);
+app.use('/api/cursos', cursoRoutes);
+app.use('/api/asignaturas', asignaturaRoutes);
+app.use('/api/logros', logroRoutes);
+app.use('/api/academic', academicRoutes);
+app.use('/api/calificaciones', calificacionRoutes);
+app.use('/api/boletin', boletinRoutes);
 
 // Ruta base
 app.get('/', (_req: Request, res: Response) => {

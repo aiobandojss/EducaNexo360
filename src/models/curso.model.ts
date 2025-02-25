@@ -1,11 +1,22 @@
-import mongoose, { Schema } from 'mongoose';
-import { ICurso } from '../interfaces/ICurso';
+import mongoose, { Schema, Document } from 'mongoose';
 
-const CursoSchema: Schema = new Schema(
+export interface ICurso extends Document {
+  nombre: string;
+  nivel: string;
+  año_academico: string;
+  escuelaId: mongoose.Types.ObjectId;
+  director_grupo: mongoose.Types.ObjectId;
+  estudiantes: mongoose.Types.ObjectId[];
+  estado: 'ACTIVO' | 'INACTIVO';
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const CursoSchema = new Schema(
   {
     nombre: {
       type: String,
-      required: [true, 'El nombre es requerido'],
+      required: [true, 'El nombre del curso es requerido'],
       trim: true,
     },
     nivel: {
@@ -33,29 +44,22 @@ const CursoSchema: Schema = new Schema(
         ref: 'Usuario',
       },
     ],
-    asignaturas: [
-      {
-        asignaturaId: {
-          type: Schema.Types.ObjectId,
-          ref: 'Asignatura',
-          required: true,
-        },
-        docenteId: {
-          type: Schema.Types.ObjectId,
-          ref: 'Usuario',
-          required: true,
-        },
-      },
-    ],
+    estado: {
+      type: String,
+      enum: ['ACTIVO', 'INACTIVO'],
+      default: 'ACTIVO',
+    },
   },
   {
     timestamps: true,
-    versionKey: false,
   },
 );
 
-// Índices para optimizar búsquedas
+// Índices
 CursoSchema.index({ escuelaId: 1, año_academico: 1 });
 CursoSchema.index({ director_grupo: 1 });
+CursoSchema.index({ nombre: 1, escuelaId: 1 }, { unique: true });
 
-export default mongoose.model<ICurso>('Curso', CursoSchema);
+const Curso = mongoose.model<ICurso>('Curso', CursoSchema);
+
+export default Curso;

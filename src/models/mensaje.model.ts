@@ -1,5 +1,7 @@
+// src/models/mensaje.model.ts
+
 import mongoose, { Schema } from 'mongoose';
-import { IMensaje } from '../interfaces/IMensaje';
+import { IMensaje, TipoMensaje, EstadoMensaje, PrioridadMensaje } from '../interfaces/IMensaje';
 
 const AdjuntoSchema = new Schema({
   nombre: {
@@ -8,35 +10,54 @@ const AdjuntoSchema = new Schema({
   },
   tipo: {
     type: String,
-    required: [true, 'El tipo de archivo es requerido'],
-  },
-  url: {
-    type: String,
-    required: [true, 'La URL del archivo es requerida'],
+    required: [true, 'El tipo del archivo es requerido'],
   },
   tamaño: {
     type: Number,
     required: [true, 'El tamaño del archivo es requerido'],
   },
+  fileId: {
+    type: Schema.Types.ObjectId,
+    required: [true, 'El ID del archivo es requerido'],
+  },
+  fechaSubida: {
+    type: Date,
+    default: Date.now,
+  },
 });
 
-const ReceptorSchema = new Schema({
+const LecturaSchema = new Schema({
   usuarioId: {
     type: Schema.Types.ObjectId,
     ref: 'Usuario',
     required: true,
   },
-  leido: {
-    type: Boolean,
-    default: false,
-  },
   fechaLectura: {
     type: Date,
+    default: Date.now,
   },
 });
 
-const MensajeSchema: Schema = new Schema(
+const MensajeSchema = new Schema(
   {
+    remitente: {
+      type: Schema.Types.ObjectId,
+      ref: 'Usuario',
+      required: [true, 'El remitente es requerido'],
+    },
+    destinatarios: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: 'Usuario',
+        required: [true, 'Al menos un destinatario es requerido'],
+      },
+    ],
+    destinatariosCc: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: 'Usuario',
+      },
+    ],
     asunto: {
       type: String,
       required: [true, 'El asunto es requerido'],
@@ -46,69 +67,53 @@ const MensajeSchema: Schema = new Schema(
       type: String,
       required: [true, 'El contenido es requerido'],
     },
-    emisorId: {
-      type: Schema.Types.ObjectId,
-      ref: 'Usuario',
-      required: [true, 'El emisor es requerido'],
+    tipo: {
+      type: String,
+      enum: Object.values(TipoMensaje),
+      default: TipoMensaje.INDIVIDUAL,
     },
-    receptores: [ReceptorSchema],
+    prioridad: {
+      type: String,
+      enum: Object.values(PrioridadMensaje),
+      default: PrioridadMensaje.NORMAL,
+    },
+    estado: {
+      type: String,
+      enum: Object.values(EstadoMensaje),
+      default: EstadoMensaje.ENVIADO,
+    },
+    etiquetas: [
+      {
+        type: String,
+        trim: true,
+      },
+    ],
+    adjuntos: [AdjuntoSchema],
     escuelaId: {
       type: Schema.Types.ObjectId,
       ref: 'Escuela',
       required: [true, 'La escuela es requerida'],
     },
-    tipo: {
-      type: String,
-      enum: ['CIRCULAR', 'MENSAJE', 'NOTIFICACION'],
-      required: [true, 'El tipo de mensaje es requerido'],
+    esRespuesta: {
+      type: Boolean,
+      default: false,
     },
-    estado: {
-      type: String,
-      enum: ['BORRADOR', 'ENVIADO', 'ARCHIVADO'],
-      default: 'BORRADOR',
-    },
-    adjuntos: [AdjuntoSchema],
-    importancia: {
-      type: String,
-      enum: ['ALTA', 'NORMAL', 'BAJA'],
-      default: 'NORMAL',
-    },
-    respuestaA: {
+    mensajeOriginalId: {
       type: Schema.Types.ObjectId,
       ref: 'Mensaje',
     },
+    lecturas: [LecturaSchema],
   },
   {
     timestamps: true,
-    versionKey: false,
   },
 );
 
-// Índices para optimizar búsquedas
-MensajeSchema.index({ emisorId: 1, createdAt: -1 });
-MensajeSchema.index({ 'receptores.usuarioId': 1, createdAt: -1 });
-MensajeSchema.index({ escuelaId: 1, tipo: 1 });
+// Índices para mejorar las consultas
+MensajeSchema.index({ remitente: 1, createdAt: -1 });
+MensajeSchema.index({ destinatarios: 1, createdAt: -1 });
+MensajeSchema.index({ escuelaId: 1, createdAt: -1 });
 MensajeSchema.index({ estado: 1 });
-
-// Virtual para contar receptores que han leído el mensaje
-MensajeSchema.virtual('cantidadLeidos').get(function (this: IMensaje) {
-  return this.receptores.filter((receptor) => receptor.leido).length;
-});
-
-// Virtual para contar total de receptores
-MensajeSchema.virtual('totalReceptores').get(function (this: IMensaje) {
-  return this.receptores.length;
-});
-
-// Middleware para manejar cambios de estado
-MensajeSchema.pre('save', function (next) {
-  // Si el mensaje pasa de borrador a enviado, establecer la fecha de envío
-  if (this.isModified('estado') && this.estado === 'ENVIADO') {
-    if (!this.createdAt) {
-      this.createdAt = new Date();
-    }
-  }
-  next();
-});
+MensajeSchema.index({ tipo: 1 });
 
 export default mongoose.model<IMensaje>('Mensaje', MensajeSchema);

@@ -14,6 +14,16 @@ import logroRoutes from './routes/logro.routes';
 import academicRoutes from './routes/academic.routes';
 import calificacionRoutes from './routes/calificacion.routes';
 import boletinRoutes from './routes/boletin.routes';
+import mensajeRoutes from './routes/mensaje.routes';
+import gridfsManager from './config/gridfs';
+import notificacionRoutes from './routes/notificacion.routes';
+import {
+  setupCompression,
+  responseTimeMiddleware,
+  rateLimiter,
+} from './middleware/performance.middleware';
+
+//import config from './config/config';
 
 // Configuración de variables de entorno
 dotenv.config();
@@ -25,9 +35,13 @@ app.use(cors());
 app.use(helmet());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+setupCompression(app);
+app.use(responseTimeMiddleware);
 
 // Rutas
-app.use('/api/auth', authRoutes);
+app.use('/api/auth', rateLimiter(60000, 20), authRoutes);
+app.use('/api/mensajes', rateLimiter(60000, 100), mensajeRoutes);
+//app.use('/api/auth', authRoutes);
 app.use('/api/escuelas', escuelaRoutes);
 app.use('/api/usuarios', usuarioRoutes);
 app.use('/api/cursos', cursoRoutes);
@@ -36,6 +50,8 @@ app.use('/api/logros', logroRoutes);
 app.use('/api/academic', academicRoutes);
 app.use('/api/calificaciones', calificacionRoutes);
 app.use('/api/boletin', boletinRoutes);
+//app.use('/api/mensajes', mensajeRoutes);
+app.use('/api/notificaciones', notificacionRoutes);
 
 // Ruta base
 app.get('/', (_req: Request, res: Response) => {
@@ -64,13 +80,18 @@ app.use((err: Error | ApiError, _req: Request, res: Response, _next: NextFunctio
   }
 });
 
-// Conexión a MongoDB
 const connectDB = async () => {
   try {
     const conn = await mongoose.connect(
       process.env.MONGODB_URI || 'mongodb://localhost:27017/educanexo360',
     );
     console.log(`MongoDB Connected: ${conn.connection.host}`);
+
+    // Inicializar GridFS después de conectar a MongoDB
+    await gridfsManager.initializeStorage(
+      process.env.MONGODB_URI || 'mongodb://localhost:27017/educanexo360',
+    );
+    console.log('GridFS Storage initialized successfully');
   } catch (error) {
     console.error('Error connecting to MongoDB:', error);
     process.exit(1);

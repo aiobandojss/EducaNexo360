@@ -1,0 +1,139 @@
+// src/docs/auth.yaml
+
+paths:
+  /auth/login:
+    post:
+      tags:
+        - Autenticación
+      summary: Iniciar sesión
+      description: Autentica a un usuario y devuelve tokens de acceso y actualización
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  description: Email del usuario
+                password:
+                  type: string
+                  format: password
+                  description: Contraseña del usuario
+      responses:
+        '200':
+          description: Login exitoso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      user:
+                        $ref: '#/components/schemas/Usuario'
+                      tokens:
+                        type: object
+                        properties:
+                          access:
+                            type: object
+                            properties:
+                              token:
+                                type: string
+                              expires:
+                                type: string
+                          refresh:
+                            type: object
+                            properties:
+                              token:
+                                type: string
+                              expires:
+                                type: string
+        '401':
+          description: Credenciales inválidas
+  
+  /auth/refresh:
+    post:
+      tags:
+        - Autenticación
+      summary: Actualizar tokens
+      description: Genera un nuevo token de acceso usando un token de actualización
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - refreshToken
+              properties:
+                refreshToken:
+                  type: string
+                  description: Token de actualización
+      responses:
+        '200':
+          description: Token actualizado exitosamente
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: object
+                    properties:
+                      access:
+                        type: object
+                        properties:
+                          token:
+                            type: string
+                          expires:
+                            type: string
+        '401':
+          description: Token inválido o expirado
+
+components:
+  schemas:
+    Usuario:
+      type: object
+      properties:
+        _id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        nombre:
+          type: string
+        apellidos:
+          type: string
+        tipo:
+          type: string
+          enum:
+            - ADMIN
+            - DOCENTE
+            - PADRE
+            - ESTUDIANTE
+        estado:
+          type: string
+          enum:
+            - ACTIVO
+            - INACTIVO
+        escuelaId:
+          type: string
+          format: uuid
+        permisos:
+          type: array
+          items:
+            type: string

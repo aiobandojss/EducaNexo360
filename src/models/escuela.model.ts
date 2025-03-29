@@ -2,6 +2,20 @@ import mongoose, { Schema } from 'mongoose';
 
 const EscuelaSchema: Schema = new Schema(
   {
+    codigo: {
+      type: String,
+      required: [true, 'El código de la escuela es requerido'],
+      unique: true,
+      trim: true,
+      uppercase: true,
+      // Validador para asegurar un formato válido (solo letras, números y guiones)
+      validate: {
+        validator: function (value: string) {
+          return /^[A-Z0-9-]+$/.test(value);
+        },
+        message: 'El código debe contener solo letras, números y guiones',
+      },
+    },
     nombre: {
       type: String,
       required: [true, 'El nombre es requerido'],
@@ -82,6 +96,7 @@ const EscuelaSchema: Schema = new Schema(
 
 // Índices
 EscuelaSchema.index({ email: 1 }, { unique: true });
+EscuelaSchema.index({ codigo: 1 }, { unique: true });
 EscuelaSchema.index({ estado: 1 });
 
 const Escuela = mongoose.model('Escuela', EscuelaSchema);

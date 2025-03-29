@@ -1,8 +1,0 @@
-asignatura.validation.ts
-auth.validation.ts
-calificacion.validation.ts
-curso.validation.ts
-escuela.validation.ts
-lista.txt
-logro.validation.ts
-usuario.validation.ts

@@ -14,7 +14,8 @@ const router = express.Router();
 // Todas las rutas requieren autenticación
 router.use(authenticate);
 
-// Rutas para administradores
+// Rutas para administradores y personal administrativo
+// (ADMIN, RECTOR, COORDINADOR, ADMINISTRATIVO)
 router.post('/', authorize('ADMIN'), validate(crearCursoValidation), cursoController.crear);
 
 router.put(
@@ -41,9 +42,17 @@ router.delete(
   cursoController.removerEstudiantes,
 );
 
-// Rutas de consulta (accesibles para ADMIN y DOCENTE)
-router.get('/', authorize('ADMIN', 'DOCENTE'), cursoController.obtenerTodos);
+// Rutas de consulta (accesibles para ADMIN, RECTOR, COORDINADOR, ADMINISTRATIVO y DOCENTE)
+router.get(
+  '/',
+  authorize('ADMIN', 'DOCENTE', 'RECTOR', 'COORDINADOR', 'ADMINISTRATIVO'),
+  cursoController.obtenerTodos,
+);
 
-router.get('/:id', authorize('ADMIN', 'DOCENTE'), cursoController.obtenerPorId);
+router.get(
+  '/:id',
+  authorize('ADMIN', 'DOCENTE', 'RECTOR', 'COORDINADOR', 'ADMINISTRATIVO'),
+  cursoController.obtenerPorId,
+);
 
 export default router;

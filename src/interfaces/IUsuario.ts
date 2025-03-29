@@ -1,12 +1,26 @@
 import { Document, Types } from 'mongoose';
 
+// Definición de tipos de usuario
+export type TipoUsuario =
+  | 'SUPER_ADMIN'
+  | 'ADMIN'
+  | 'DOCENTE'
+  | 'ACUDIENTE' // Cambiado de PADRE a ACUDIENTE
+  | 'ESTUDIANTE'
+  | 'COORDINADOR' // Nuevo rol
+  | 'RECTOR' // Nuevo rol
+  | 'ADMINISTRATIVO'; // Nuevo rol
+
+// Definición de estados de usuario
+export type EstadoUsuario = 'ACTIVO' | 'INACTIVO';
+
 export interface IUsuarioBase {
   email: string;
   password: string;
   nombre: string;
   apellidos: string;
-  tipo: 'ADMIN' | 'DOCENTE' | 'PADRE' | 'ESTUDIANTE';
-  estado: 'ACTIVO' | 'INACTIVO';
+  tipo: TipoUsuario;
+  estado: EstadoUsuario;
   escuelaId: Types.ObjectId;
   permisos: string[];
   perfil: {
@@ -18,7 +32,7 @@ export interface IUsuarioBase {
     grado?: string;
     grupo?: string;
     codigo_estudiante?: string;
-    estudiantes_asociados?: Types.ObjectId[]; // Para padres
+    estudiantes_asociados?: Types.ObjectId[]; // Para acudientes
     asignaturas_asignadas?: {
       // Para docentes
       asignaturaId: Types.ObjectId;

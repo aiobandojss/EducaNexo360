@@ -1,19 +1,31 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import bcrypt from 'bcryptjs';
+import { TipoUsuario, EstadoUsuario } from '../interfaces/IUsuario';
 
 export interface IUsuario extends Document {
   email: string;
   password: string;
   nombre: string;
   apellidos: string;
-  tipo: string;
-  estado: string;
+  tipo: TipoUsuario;
+  estado: EstadoUsuario;
   escuelaId: mongoose.Types.ObjectId;
   permisos: string[];
   perfil: {
     telefono?: string;
     direccion?: string;
     foto?: string;
+  };
+  info_academica?: {
+    grado?: string;
+    grupo?: string;
+    codigo_estudiante?: string;
+    estudiantes_asociados?: mongoose.Types.ObjectId[]; // Para acudientes
+    asignaturas_asignadas?: {
+      // Para docentes
+      asignaturaId: mongoose.Types.ObjectId;
+      cursoId: mongoose.Types.ObjectId;
+    }[];
   };
   compararPassword(candidatePassword: string): Promise<boolean>;
 }
@@ -44,7 +56,16 @@ const UsuarioSchema = new Schema(
     },
     tipo: {
       type: String,
-      enum: ['ADMIN', 'DOCENTE', 'PADRE', 'ESTUDIANTE'],
+      enum: [
+        'SUPER_ADMIN',
+        'ADMIN',
+        'DOCENTE',
+        'ACUDIENTE', // Cambiado de PADRE a ACUDIENTE
+        'ESTUDIANTE',
+        'COORDINADOR', // Nuevo rol
+        'RECTOR', // Nuevo rol
+        'ADMINISTRATIVO', // Nuevo rol
+      ],
       required: [true, 'El tipo de usuario es requerido'],
     },
     estado: {
@@ -66,6 +87,29 @@ const UsuarioSchema = new Schema(
       telefono: String,
       direccion: String,
       foto: String,
+    },
+    info_academica: {
+      grado: String,
+      grupo: String,
+      codigo_estudiante: String,
+      estudiantes_asociados: [
+        {
+          type: Schema.Types.ObjectId,
+          ref: 'Usuario',
+        },
+      ],
+      asignaturas_asignadas: [
+        {
+          asignaturaId: {
+            type: Schema.Types.ObjectId,
+            ref: 'Asignatura',
+          },
+          cursoId: {
+            type: Schema.Types.ObjectId,
+            ref: 'Curso',
+          },
+        },
+      ],
     },
   },
   {
@@ -92,6 +136,13 @@ UsuarioSchema.methods.compararPassword = async function (
 ): Promise<boolean> {
   return bcrypt.compare(candidatePassword, this.password);
 };
+
+// Agregar índices para mejorar el rendimiento de las consultas
+UsuarioSchema.index({ email: 1 });
+UsuarioSchema.index({ tipo: 1 });
+UsuarioSchema.index({ escuelaId: 1 });
+UsuarioSchema.index({ 'info_academica.estudiantes_asociados': 1 });
+UsuarioSchema.index({ 'info_academica.asignaturas_asignadas.cursoId': 1 });
 
 const Usuario = mongoose.model<IUsuario>('Usuario', UsuarioSchema);
 

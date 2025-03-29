@@ -6,6 +6,8 @@
     "skipLibCheck": true,
     "sourceMap": true,
     "outDir": "./dist",
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
     "moduleResolution": "node",
     "removeComments": true,
     "noImplicitAny": true,
@@ -23,8 +25,19 @@
     "resolveJsonModule": true,
     "baseUrl": ".",
     "typeRoots": ["./node_modules/@types", "./src/@types"],
-    "types": ["node", "express", "jest"]
+    "types": ["node", "express", "jest"],
+    "paths": {
+      // Otras rutas existentes...
+      "express-fileupload": ["./node_modules/express-fileupload/lib/index.d.ts"]
+    }
   },
-  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.js"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.d.ts",
+    "src/**/*.js",
+    "src/tests/mensajeria/test-mensajes-endpoints.mjs",
+    "src/tests/notificaciones.test.mjs",
+    ".mjs"
+  ],
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }

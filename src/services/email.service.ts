@@ -5,6 +5,10 @@ import path from 'path';
 import config from '../config/config';
 import fs from 'fs';
 
+// Constante para deshabilitar temporalmente el envío de correos
+// Cambiar a false cuando se quiera habilitar nuevamente
+const DISABLE_EMAIL_SENDING = true;
+
 class EmailService {
   private transporter: nodemailer.Transporter;
 
@@ -36,6 +40,16 @@ class EmailService {
     attachments?: any[];
   }): Promise<boolean> {
     try {
+      // Si el envío de correos está deshabilitado, simular envío exitoso
+      if (DISABLE_EMAIL_SENDING) {
+        console.log(
+          '📧 [EMAIL DESHABILITADO] No se envió el correo pero se simula respuesta exitosa',
+        );
+        console.log('📧 Destinatario:', options.to);
+        console.log('📧 Asunto:', options.subject);
+        return true; // Simular éxito
+      }
+
       // Si se proporciona una plantilla, cargarla
       let html = options.html;
       if (options.template) {

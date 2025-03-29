@@ -15,7 +15,16 @@ export const registerValidation = [
   body('nombre').trim().notEmpty().withMessage('El nombre es requerido'),
   body('apellidos').trim().notEmpty().withMessage('Los apellidos son requeridos'),
   body('tipo')
-    .isIn(['ADMIN', 'DOCENTE', 'PADRE', 'ESTUDIANTE'])
+    .isIn([
+      'ADMIN',
+      'SUPER_ADMIN',
+      'DOCENTE',
+      'ACUDIENTE', // Cambiado de PADRE a ACUDIENTE
+      'ESTUDIANTE',
+      'COORDINADOR', // Nuevo rol
+      'RECTOR', // Nuevo rol
+      'ADMINISTRATIVO', // Nuevo rol
+    ])
     .withMessage('Tipo de usuario no válido'),
   body('escuelaId').isMongoId().withMessage('ID de escuela no válido'),
 ];

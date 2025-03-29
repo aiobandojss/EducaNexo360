@@ -36,7 +36,15 @@ const NotificacionSchema = new Schema(
     },
     entidadTipo: {
       type: String,
-      enum: ['Mensaje', 'Calificacion', 'Curso', 'Asignatura', 'Usuario'],
+      enum: [
+        'Mensaje',
+        'Calificacion',
+        'Curso',
+        'Asignatura',
+        'Usuario',
+        'EventoCalendario',
+        'Anuncio',
+      ],
     },
     escuelaId: {
       type: Schema.Types.ObjectId,

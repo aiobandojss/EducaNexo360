@@ -5,23 +5,28 @@ import { SignOptions, sign, verify } from 'jsonwebtoken';
 interface JwtPayload {
   sub: string;
   tipo: string;
-  escuelaId: string;
+  escuelaId?: string; // Hecho opcional para SUPER_ADMIN
 }
 
 class AuthService {
   private generateTokens(user: any) {
+    // Crear el payload con las propiedades básicas
     const payload: JwtPayload = {
       sub: user._id.toString(),
       tipo: user.tipo,
-      escuelaId: user.escuelaId.toString(),
     };
+
+    // Añadir escuelaId solo si existe (para usuarios que no son SUPER_ADMIN)
+    if (user.escuelaId) {
+      payload.escuelaId = user.escuelaId.toString();
+    }
 
     const defaultAccessExpiry = '1d';
     const defaultRefreshExpiry = '7d';
 
     return {
       access: {
-        token: sign(payload, process.env.JWT_SECRET || 'tu_jwt_secret_muy_seguro', {
+        token: sign(payload, process.env.JWT_SECRET || 'p8EzG5qXm3vKr7tY9jN2wB4aD6cF1uH8sL0oI5yR', {
           expiresIn: process.env.JWT_EXPIRES_IN || defaultAccessExpiry,
         } as SignOptions),
         expires: process.env.JWT_EXPIRES_IN || defaultAccessExpiry,
@@ -29,7 +34,7 @@ class AuthService {
       refresh: {
         token: sign(
           payload,
-          process.env.REFRESH_TOKEN_SECRET || 'tu_refresh_token_secret_muy_seguro',
+          process.env.REFRESH_TOKEN_SECRET || 'L7bT3xW9rQ5mZ1vK8cN4hJ6dP2aS0fG3eY5iU7oB',
           {
             expiresIn: process.env.REFRESH_TOKEN_EXPIRES_IN || defaultRefreshExpiry,
           } as SignOptions,
@@ -66,7 +71,7 @@ class AuthService {
     try {
       const decoded = verify(
         refreshToken,
-        process.env.REFRESH_TOKEN_SECRET || 'tu_refresh_token_secret_muy_seguro',
+        process.env.REFRESH_TOKEN_SECRET || 'L7bT3xW9rQ5mZ1vK8cN4hJ6dP2aS0fG3eY5iU7oB',
       ) as JwtPayload;
 
       const user = await Usuario.findById(decoded.sub);

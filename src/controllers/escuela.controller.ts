@@ -1,6 +1,33 @@
 import { Request, Response, NextFunction } from 'express';
 import Escuela from '../models/escuela.model';
 import ApiError from '../utils/ApiError';
+import mongoose from 'mongoose';
+
+interface RequestWithUser extends Request {
+  user?: {
+    _id: string;
+    escuelaId: string;
+    tipo: string;
+    email: string;
+    nombre: string;
+    apellidos: string;
+    estado: string;
+  };
+}
+
+// Tipo explícito para el documento de Escuela
+interface EscuelaDocument {
+  _id: mongoose.Types.ObjectId;
+  nombre: string;
+  codigo?: string;
+  direccion?: string;
+  telefono?: string;
+  email?: string;
+  sitioWeb?: string;
+  logo?: string;
+  descripcion?: string;
+  [key: string]: any; // Para otras propiedades que pueda tener
+}
 
 class EscuelaController {
   async crear(req: Request, res: Response, next: NextFunction) {
@@ -27,20 +54,64 @@ class EscuelaController {
     }
   }
 
-  async obtenerPorId(req: Request, res: Response, next: NextFunction) {
+  async obtenerPorId(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const escuela = await Escuela.findById(req.params.id);
+      const userRequest = req as RequestWithUser;
+      const currentUser = userRequest.user;
+
+      if (!currentUser) {
+        throw new ApiError(401, 'No autorizado');
+        return;
+      }
+
+      // Usamos type assertion para el documento
+      const escuela = (await Escuela.findById(req.params.id)) as unknown as EscuelaDocument;
 
       if (!escuela) {
         throw new ApiError(404, 'Escuela no encontrada');
+        return;
       }
+
+      // Convertimos ambos IDs a string para comparar
+      const escuelaIdStr = String(escuela._id);
+      const userEscuelaIdStr = String(currentUser.escuelaId);
+
+      // Verificar que el usuario solo pueda ver su propia escuela
+      if (userEscuelaIdStr !== escuelaIdStr && currentUser.tipo !== 'ADMIN') {
+        throw new ApiError(403, 'No tienes permiso para ver esta escuela');
+        return;
+      }
+
+      // Para administradores, devolver la información completa
+      if (currentUser.tipo === 'ADMIN') {
+        res.json({
+          success: true,
+          data: escuela,
+        });
+        return;
+      }
+
+      // Para otros roles, devolver solo información pública
+      const informacionPublica = {
+        _id: escuela._id,
+        nombre: escuela.nombre,
+        codigo: escuela.codigo || '',
+        direccion: escuela.direccion || '',
+        telefono: escuela.telefono || '',
+        email: escuela.email || '',
+        sitioWeb: escuela.sitioWeb || '',
+        logo: escuela.logo || '',
+        descripcion: escuela.descripcion || '',
+      };
 
       res.json({
         success: true,
-        data: escuela,
+        data: informacionPublica,
       });
+      return;
     } catch (error) {
       next(error);
+      return;
     }
   }
 

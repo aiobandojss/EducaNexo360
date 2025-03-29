@@ -6,23 +6,28 @@ import Mensaje from '../models/mensaje.model';
 import Usuario from '../models/usuario.model';
 import gridfsManager from '../config/gridfs';
 import emailService from '../services/email.service';
-import notificacionService from '../services/notificacion.service'; // Nuevo import
+import notificacionService from '../services/notificacion.service';
+import mensajeService from '../services/mensaje.service'; // Importamos el nuevo servicio
 import config from '../config/config';
 import ApiError from '../utils/ApiError';
 import { TipoMensaje, EstadoMensaje, PrioridadMensaje } from '../interfaces/IMensaje';
-import { TipoNotificacion } from '../interfaces/INotificacion'; // Nuevo import
+import { TipoNotificacion } from '../interfaces/INotificacion';
+import { TipoUsuario } from '../interfaces/IUsuario'; // Agregamos la importación
 import fs from 'fs';
 import path from 'path';
+
+export const ROLES_CON_BORRADORES = ['ADMIN', 'RECTOR', 'COORDINADOR', 'ADMINISTRATIVO', 'DOCENTE'];
 
 interface RequestWithUser extends Request {
   user?: {
     _id: string;
     escuelaId: string;
-    tipo: string;
+    tipo: TipoUsuario;
     email: string;
     nombre: string;
     apellidos: string;
     estado: string;
+    info_academica?: any;
   };
   files?: Express.Multer.File[];
 }
@@ -34,17 +39,1266 @@ interface ILectura {
 }
 
 export class MensajeController {
-  // Crear un nuevo mensaje
-  async crear(req: RequestWithUser, res: Response, next: NextFunction) {
+  // Método para obtener posibles destinatarios según el rol del usuario
+  async getPosiblesDestinatarios(
+    req: RequestWithUser,
+    res: Response,
+    next: NextFunction,
+  ): Promise<any> {
     try {
       if (!req.user) {
         throw new ApiError(401, 'No autorizado');
+      }
+
+      // Validar IDs
+      if (!mongoose.isValidObjectId(req.user._id)) {
+        throw new ApiError(400, 'ID de usuario inválido');
+      }
+
+      if (!mongoose.isValidObjectId(req.user.escuelaId)) {
+        throw new ApiError(400, 'ID de escuela inválido');
+      }
+
+      // Extraer el parámetro 'q' de req.query y manejarlo de forma segura
+      const queryParam = req.query.q as string;
+      const searchQuery = queryParam ? queryParam.trim() : '';
+
+      console.log(
+        `[DEBUG] Controlador - Buscando destinatarios para usuario: ${req.user._id}, escuela: ${req.user.escuelaId}, tipo: ${req.user.tipo}, query: '${searchQuery}'`,
+      );
+
+      // Aplicar lógica basada en el rol del usuario
+      let destinatarios: any[] = [];
+      const tipoUsuario = req.user.tipo;
+
+      // 1. ADMIN, RECTOR, COORDINADOR, ADMINISTRATIVO: pueden ver a todos los usuarios
+      if (['ADMIN', 'RECTOR', 'COORDINADOR', 'ADMINISTRATIVO'].includes(tipoUsuario)) {
+        console.log('[DEBUG] Usuario administrativo - Mostrando todos los usuarios');
+
+        // Construir filtro de búsqueda
+        const filter: any = {
+          escuelaId: new mongoose.Types.ObjectId(req.user.escuelaId),
+          _id: { $ne: new mongoose.Types.ObjectId(req.user._id) }, // Excluir al usuario actual
+          estado: 'ACTIVO',
+        };
+
+        // Aplicar búsqueda si hay query
+        if (searchQuery) {
+          const searchRegex = new RegExp(searchQuery, 'i');
+          filter.$or = [
+            { nombre: searchRegex },
+            { apellidos: searchRegex },
+            { email: searchRegex },
+          ];
+        }
+
+        // Obtener todos los usuarios (excluyendo al usuario actual)
+        destinatarios = await Usuario.find(filter)
+          .select('_id nombre apellidos email tipo')
+          .limit(50)
+          .sort({ nombre: 1, apellidos: 1 });
+      }
+
+      // 2. DOCENTES: pueden ver a estudiantes de sus cursos, sus acudientes, personal administrativo y otros docentes
+      else if (tipoUsuario === 'DOCENTE') {
+        console.log('[DEBUG] Usuario docente - Obteniendo destinatarios específicos');
+
+        // Conjunto para almacenar IDs únicos
+        const idsDestinatarios = new Set<string>();
+
+        // 2.1 Obtener cursos donde es director de grupo
+        const cursosDirigidos = await mongoose
+          .model('Curso')
+          .find({
+            director_grupo: new mongoose.Types.ObjectId(req.user._id),
+            escuelaId: new mongoose.Types.ObjectId(req.user.escuelaId),
+          })
+          .select('_id estudiantes');
+
+        // 2.2 Extraer estudiantes directamente de los cursos
+        for (const curso of cursosDirigidos) {
+          if (Array.isArray(curso.estudiantes)) {
+            curso.estudiantes.forEach((estudianteId: any) => {
+              if (estudianteId) {
+                idsDestinatarios.add(estudianteId.toString());
+              }
+            });
+          }
+        }
+
+        // 2.3 Obtener asignaturas que dicta
+        const asignaturas = await mongoose
+          .model('Asignatura')
+          .find({
+            docenteId: new mongoose.Types.ObjectId(req.user._id),
+            escuelaId: new mongoose.Types.ObjectId(req.user.escuelaId),
+          })
+          .select('_id cursoId');
+
+        const cursosAsignaturas = new Set<string>();
+        asignaturas.forEach((asig) => {
+          if (asig.cursoId) {
+            cursosAsignaturas.add(asig.cursoId.toString());
+          }
+        });
+
+        // 2.4 Obtener estudiantes de los cursos donde dicta asignaturas
+        if (cursosAsignaturas.size > 0) {
+          const cursosConEstudiantes = await mongoose
+            .model('Curso')
+            .find({
+              _id: {
+                $in: Array.from(cursosAsignaturas).map((id) => new mongoose.Types.ObjectId(id)),
+              },
+            })
+            .select('estudiantes');
+
+          for (const curso of cursosConEstudiantes) {
+            if (Array.isArray(curso.estudiantes)) {
+              curso.estudiantes.forEach((estudianteId: any) => {
+                if (estudianteId) {
+                  idsDestinatarios.add(estudianteId.toString());
+                }
+              });
+            }
+          }
+        }
+
+        // 2.5 Obtener acudientes de esos estudiantes
+        const estudiantesIds = Array.from(idsDestinatarios);
+        if (estudiantesIds.length > 0) {
+          const acudientesInfo = (await Usuario.find({
+            'info_academica.estudiantes_asociados': {
+              $in: estudiantesIds.map((id) => new mongoose.Types.ObjectId(id)),
+            },
+            tipo: 'ACUDIENTE',
+            estado: 'ACTIVO',
+            escuelaId: new mongoose.Types.ObjectId(req.user.escuelaId),
+          }).select('_id')) as Array<{ _id: mongoose.Types.ObjectId }>;
+
+          acudientesInfo.forEach((acudiente) => {
+            idsDestinatarios.add(acudiente._id.toString());
+          });
+        }
+
+        // 2.6 Obtener personal administrativo y otros docentes
+        const personalYDocentes = await Usuario.find({
+          tipo: { $in: ['ADMIN', 'RECTOR', 'COORDINADOR', 'ADMINISTRATIVO', 'DOCENTE'] },
+          _id: { $ne: new mongoose.Types.ObjectId(req.user._id) }, // Excluir al docente actual
+          estado: 'ACTIVO',
+          escuelaId: new mongoose.Types.ObjectId(req.user.escuelaId),
+        }).select('_id');
+
+        personalYDocentes.forEach((p) => {
+          if ('_id' in p && p._id) {
+            idsDestinatarios.add(p._id.toString());
+          }
+        });
+
+        // 2.7 Aplicar filtro de búsqueda
+        interface QueryFilter {
+          $and?: Array<any>;
+          $or?: Array<{ [key: string]: RegExp }>;
+          [key: string]: any;
+        }
+        const filter: QueryFilter = {
+          _id: { $in: Array.from(idsDestinatarios).map((id) => new mongoose.Types.ObjectId(id)) },
+          escuelaId: new mongoose.Types.ObjectId(req.user.escuelaId),
+          estado: 'ACTIVO',
+        };
+
+        if (searchQuery) {
+          const searchRegex = new RegExp(searchQuery, 'i');
+          filter.$and = [
+            filter,
+            {
+              $or: [{ nombre: searchRegex }, { apellidos: searchRegex }, { email: searchRegex }],
+            },
+          ];
+        }
+
+        // 2.8 Obtener destinatarios filtrados
+        destinatarios = await Usuario.find(filter)
+          .select('_id nombre apellidos email tipo')
+          .limit(50)
+          .sort({ tipo: 1, nombre: 1 });
+      }
+
+      // 3. ACUDIENTES: redirigir al método especializado
+      else if (tipoUsuario === 'ACUDIENTE') {
+        console.log('[DEBUG] Usuario acudiente - Redirigiendo al endpoint específico');
+        return this.getDestinatariosParaAcudiente(req, res, next);
+      }
+
+      // 4. ESTUDIANTES: no pueden enviar mensajes
+      else if (tipoUsuario === 'ESTUDIANTE') {
+        throw new ApiError(403, 'Los estudiantes no tienen permisos para enviar mensajes');
+      }
+
+      // Si llegamos aquí con un tipo de usuario no reconocido, enviar una lista vacía
+      else {
+        console.log(`[DEBUG] Tipo de usuario no reconocido: ${tipoUsuario}`);
+        destinatarios = [];
+      }
+
+      console.log(`[DEBUG] Controlador - Destinatarios encontrados: ${destinatarios.length}`);
+
+      return res.json({
+        success: true,
+        data: destinatarios,
+      });
+    } catch (error) {
+      console.error('Error al obtener destinatarios:', error);
+      return next(error);
+    }
+  }
+
+  async guardarBorrador(req: RequestWithUser, res: Response, next: NextFunction) {
+    try {
+      if (!req.user) {
+        throw new ApiError(401, 'No autorizado');
+      }
+
+      // Verificar que el usuario tiene permiso para crear borradores
+      if (!ROLES_CON_BORRADORES.includes(req.user.tipo)) {
+        throw new ApiError(403, 'No tiene permisos para guardar borradores');
       }
 
       // Obtener datos del mensaje
       const {
         destinatarios,
         destinatariosCc,
+        asunto,
+        contenido,
+        prioridad = PrioridadMensaje.NORMAL,
+        etiquetas,
+      } = req.body;
+
+      // Verificar si es un borrador existente que se está actualizando
+      const borradorId = req.query.id || req.body.id;
+      let borrador;
+
+      if (borradorId && mongoose.isValidObjectId(borradorId)) {
+        // Verificar que el borrador existe y pertenece al usuario
+        borrador = await Mensaje.findOne({
+          _id: borradorId,
+          remitente: req.user._id,
+          tipo: TipoMensaje.BORRADOR,
+        });
+
+        if (!borrador) {
+          throw new ApiError(404, 'Borrador no encontrado');
+        }
+
+        // Actualizar el borrador existente
+        borrador.asunto = asunto || borrador.asunto;
+        borrador.contenido = contenido || borrador.contenido;
+        borrador.prioridad = prioridad || borrador.prioridad;
+
+        // Solo actualizar destinatarios si se proporcionan
+        if (destinatarios && Array.isArray(destinatarios) && destinatarios.length > 0) {
+          borrador.destinatarios = destinatarios.map(
+            (id: string) => new mongoose.Types.ObjectId(id),
+          );
+        }
+
+        // Solo actualizar destinatariosCc si se proporcionan
+        if (destinatariosCc && Array.isArray(destinatariosCc)) {
+          borrador.destinatariosCc = destinatariosCc.map(
+            (id: string) => new mongoose.Types.ObjectId(id),
+          );
+        }
+
+        // Actualizar etiquetas si se proporcionan
+        if (etiquetas) {
+          borrador.etiquetas = Array.isArray(etiquetas) ? etiquetas : [etiquetas];
+        }
+
+        // Manejar adjuntos si hay archivos nuevos
+        if (req.files && req.files.length > 0) {
+          // Crear adjuntos si hay archivos
+          const adjuntos = [];
+
+          if (req.files && req.files.length > 0) {
+            // Verificación de tamaño total
+            const totalSize = req.files.reduce((sum, file) => sum + file.size, 0);
+            const MAX_TOTAL_SIZE = 15 * 1024 * 1024; // 15MB
+
+            if (totalSize > MAX_TOTAL_SIZE) {
+              throw new ApiError(
+                400,
+                `El tamaño total de los archivos adjuntos no puede superar los 15MB (tamaño actual: ${(
+                  totalSize /
+                  (1024 * 1024)
+                ).toFixed(2)}MB)`,
+              );
+            }
+
+            const bucket = gridfsManager.getBucket();
+            if (!bucket) {
+              throw new ApiError(500, 'Servicio de archivos no disponible');
+            }
+
+            for (const file of req.files) {
+              // Subir archivo a GridFS
+              const filename = file.filename || path.basename(file.path);
+              const uploadStream = bucket.openUploadStream(filename, {
+                metadata: {
+                  originalName: file.originalname,
+                  contentType: file.mimetype,
+                  size: file.size,
+                  uploadedBy: req.user._id,
+                },
+              });
+
+              const fileContent = fs.readFileSync(file.path);
+              uploadStream.write(fileContent);
+              uploadStream.end();
+
+              adjuntos.push({
+                nombre: file.originalname,
+                tipo: file.mimetype,
+                tamaño: file.size,
+                fileId: uploadStream.id,
+                fechaSubida: new Date(),
+              });
+
+              // Limpiar archivo temporal
+              try {
+                fs.unlinkSync(file.path);
+              } catch (error) {
+                console.error('Error deleting temporary file:', error);
+              }
+            }
+          }
+
+          // Añadir los nuevos adjuntos a los existentes
+          if (!borrador.adjuntos) {
+            borrador.adjuntos = [];
+          }
+          borrador.adjuntos = [...borrador.adjuntos, ...adjuntos];
+        }
+
+        await borrador.save();
+      } else {
+        // Crear un nuevo borrador
+        const nuevoBorrador = new Mensaje({
+          remitente: new mongoose.Types.ObjectId(req.user._id),
+          destinatarios: destinatarios
+            ? destinatarios.map((id: string) => new mongoose.Types.ObjectId(id))
+            : [],
+          destinatariosCc: destinatariosCc
+            ? destinatariosCc.map((id: string) => new mongoose.Types.ObjectId(id))
+            : [],
+          asunto: asunto || '(Sin asunto)',
+          contenido: contenido || '',
+          tipo: TipoMensaje.BORRADOR,
+          estado: EstadoMensaje.BORRADOR,
+          prioridad,
+          etiquetas: etiquetas ? (Array.isArray(etiquetas) ? etiquetas : [etiquetas]) : [],
+          escuelaId: new mongoose.Types.ObjectId(req.user.escuelaId),
+        });
+
+        // Crear adjuntos si hay archivos
+        const adjuntos = [];
+
+        if (req.files && req.files.length > 0) {
+          // Verificación de tamaño total
+          const totalSize = req.files.reduce((sum, file) => sum + file.size, 0);
+          const MAX_TOTAL_SIZE = 15 * 1024 * 1024; // 15MB
+
+          if (totalSize > MAX_TOTAL_SIZE) {
+            throw new ApiError(
+              400,
+              `El tamaño total de los archivos adjuntos no puede superar los 15MB (tamaño actual: ${(
+                totalSize /
+                (1024 * 1024)
+              ).toFixed(2)}MB)`,
+            );
+          }
+
+          const bucket = gridfsManager.getBucket();
+          if (!bucket) {
+            throw new ApiError(500, 'Servicio de archivos no disponible');
+          }
+
+          for (const file of req.files) {
+            // Subir archivo a GridFS
+            const filename = file.filename || path.basename(file.path);
+            const uploadStream = bucket.openUploadStream(filename, {
+              metadata: {
+                originalName: file.originalname,
+                contentType: file.mimetype,
+                size: file.size,
+                uploadedBy: req.user._id,
+              },
+            });
+
+            const fileContent = fs.readFileSync(file.path);
+            uploadStream.write(fileContent);
+            uploadStream.end();
+
+            adjuntos.push({
+              nombre: file.originalname,
+              tipo: file.mimetype,
+              tamaño: file.size,
+              fileId: uploadStream.id,
+              fechaSubida: new Date(),
+            });
+
+            // Limpiar archivo temporal
+            try {
+              fs.unlinkSync(file.path);
+            } catch (error) {
+              console.error('Error deleting temporary file:', error);
+            }
+          }
+        }
+
+        nuevoBorrador.adjuntos = adjuntos;
+        borrador = await nuevoBorrador.save();
+      }
+
+      res.status(200).json({
+        success: true,
+        data: borrador,
+        message: 'Borrador guardado correctamente',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async enviarBorrador(req: RequestWithUser, res: Response, next: NextFunction) {
+    try {
+      if (!req.user) {
+        throw new ApiError(401, 'No autorizado');
+      }
+
+      // Verificar que el usuario tiene permiso para crear borradores
+      if (!ROLES_CON_BORRADORES.includes(req.user.tipo)) {
+        throw new ApiError(403, 'No tiene permisos para usar borradores');
+      }
+
+      const { id } = req.params;
+
+      // Verificar que el borrador existe y pertenece al usuario
+      const borrador = await Mensaje.findOne({
+        _id: id,
+        remitente: req.user._id,
+        tipo: TipoMensaje.BORRADOR,
+        estado: EstadoMensaje.BORRADOR,
+      });
+
+      if (!borrador) {
+        throw new ApiError(404, 'Borrador no encontrado');
+      }
+
+      // Verificar que tenga al menos un destinatario
+      if (!borrador.destinatarios || borrador.destinatarios.length === 0) {
+        throw new ApiError(400, 'El mensaje debe tener al menos un destinatario');
+      }
+
+      // Obtener todos los usuarios involucrados en el mensaje
+      const usuarios = new Set<string>();
+
+      // Añadir remitente
+      usuarios.add(borrador.remitente.toString());
+
+      // Añadir destinatarios
+      if (borrador.destinatarios && Array.isArray(borrador.destinatarios)) {
+        borrador.destinatarios.forEach((dest: any) => {
+          const destId =
+            typeof dest === 'object' && dest._id ? dest._id.toString() : dest.toString();
+          usuarios.add(destId);
+        });
+      }
+
+      // Añadir destinatarios en copia
+      if (borrador.destinatariosCc && Array.isArray(borrador.destinatariosCc)) {
+        borrador.destinatariosCc.forEach((dest: any) => {
+          const destId =
+            typeof dest === 'object' && dest._id ? dest._id.toString() : dest.toString();
+          usuarios.add(destId);
+        });
+      }
+
+      // Establecer estado para todos los usuarios
+      const ahora = new Date();
+      const estadosUsuarios = Array.from(usuarios).map((userId) => ({
+        usuarioId: new mongoose.Types.ObjectId(userId),
+        estado: EstadoMensaje.ENVIADO,
+        fechaAccion: ahora,
+      }));
+
+      // Actualizar directamente en la base de datos con un filtro más específico
+      const resultado = await Mensaje.updateOne(
+        {
+          _id: id,
+          remitente: new mongoose.Types.ObjectId(req.user._id),
+          tipo: TipoMensaje.BORRADOR,
+          estado: EstadoMensaje.BORRADOR,
+        },
+        {
+          $set: {
+            tipo: TipoMensaje.INDIVIDUAL,
+            estado: EstadoMensaje.ENVIADO,
+            estadosUsuarios: estadosUsuarios,
+            fechaAccion: ahora,
+          },
+        },
+      );
+
+      // Verificar que la actualización funcionó
+      if (resultado.matchedCount === 0 || resultado.modifiedCount === 0) {
+        console.error('Error al enviar borrador:', resultado);
+        throw new ApiError(500, 'No se pudo enviar el borrador. Por favor intenta nuevamente.');
+      }
+
+      // Obtener el mensaje actualizado para respuesta
+      const mensajeEnviado = await Mensaje.findById(id)
+        .populate('remitente', 'nombre apellidos email')
+        .populate('destinatarios', 'nombre apellidos email');
+
+      if (!mensajeEnviado) {
+        throw new ApiError(404, 'No se pudo encontrar el mensaje después de enviarlo');
+      }
+
+      // Verificamos que los cambios se aplicaron correctamente
+      if (
+        mensajeEnviado.tipo !== TipoMensaje.INDIVIDUAL ||
+        mensajeEnviado.estado !== EstadoMensaje.ENVIADO
+      ) {
+        console.error('Error: El mensaje no se actualizó correctamente:', mensajeEnviado);
+        throw new ApiError(500, 'El mensaje no se actualizó correctamente');
+      }
+
+      res.status(200).json({
+        success: true,
+        data: mensajeEnviado,
+        message: 'Mensaje enviado correctamente',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // Método para obtener borradores del usuario
+  async obtenerBorradores(req: RequestWithUser, res: Response, next: NextFunction) {
+    try {
+      if (!req.user) {
+        throw new ApiError(401, 'No autorizado');
+      }
+
+      // Verificar que el usuario tiene permiso para usar borradores
+      if (!ROLES_CON_BORRADORES.includes(req.user.tipo)) {
+        throw new ApiError(403, 'No tiene permisos para usar borradores');
+      }
+
+      const pagina = parseInt((req.query.pagina as string) || '1', 10);
+      const limite = parseInt((req.query.limite as string) || '20', 10);
+      const skip = (pagina - 1) * limite;
+
+      // Buscar borradores del usuario
+      const borradores = await Mensaje.find({
+        remitente: req.user._id,
+        tipo: TipoMensaje.BORRADOR,
+      })
+        .sort({ updatedAt: -1 })
+        .skip(skip)
+        .limit(limite)
+        .populate('destinatarios', 'nombre apellidos email tipo');
+
+      // Contar total de borradores
+      const total = await Mensaje.countDocuments({
+        remitente: req.user._id,
+        tipo: TipoMensaje.BORRADOR,
+      });
+
+      res.json({
+        success: true,
+        data: borradores,
+        meta: {
+          total,
+          pagina,
+          limite,
+          totalPaginas: Math.ceil(total / limite),
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // Método para eliminar un borrador
+  async eliminarBorrador(req: RequestWithUser, res: Response, next: NextFunction) {
+    try {
+      if (!req.user) {
+        throw new ApiError(401, 'No autorizado');
+      }
+
+      // Verificar que el usuario tiene permiso para usar borradores
+      if (!ROLES_CON_BORRADORES.includes(req.user.tipo)) {
+        throw new ApiError(403, 'No tiene permisos para usar borradores');
+      }
+
+      const { id } = req.params;
+
+      // Verificar que el borrador existe y pertenece al usuario
+      const borrador = await Mensaje.findOne({
+        _id: id,
+        remitente: req.user._id,
+        tipo: TipoMensaje.BORRADOR,
+      });
+
+      if (!borrador) {
+        throw new ApiError(404, 'Borrador no encontrado');
+      }
+
+      // Eliminar el borrador
+      await Mensaje.deleteOne({ _id: id });
+
+      // Si el borrador tiene adjuntos, eliminarlos también
+      if (borrador.adjuntos && borrador.adjuntos.length > 0) {
+        const bucket = gridfsManager.getBucket();
+        if (bucket) {
+          for (const adjunto of borrador.adjuntos) {
+            try {
+              await bucket.delete(adjunto.fileId);
+            } catch (err) {
+              console.error(`Error al eliminar adjunto con ID ${adjunto.fileId}:`, err);
+              // Continúa con el siguiente adjunto aunque falle este
+            }
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        message: 'Borrador eliminado correctamente',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // Método específico para ACUDIENTES mejorado con información contextual
+  async getDestinatariosParaAcudiente(
+    req: RequestWithUser,
+    res: Response,
+    next: NextFunction,
+  ): Promise<any> {
+    try {
+      if (!req.user) {
+        throw new ApiError(401, 'No autorizado');
+      }
+
+      // Verificar que el usuario es un acudiente
+      if (req.user.tipo !== 'ACUDIENTE') {
+        throw new ApiError(403, 'Solo los acudientes pueden acceder a esta funcionalidad');
+      }
+
+      console.log(`[DEBUG] Obteniendo destinatarios para acudiente ID: ${req.user._id}`);
+
+      // Definir interfaces para tipos
+      interface ICurso {
+        _id: mongoose.Types.ObjectId;
+        nombre: string;
+        grado: string;
+        seccion: string;
+        director_grupo?: mongoose.Types.ObjectId;
+        estudiantes?: mongoose.Types.ObjectId[];
+        grupo?: string;
+        jornada?: string;
+        nivel?: string;
+      }
+
+      interface IAsignatura {
+        _id: mongoose.Types.ObjectId;
+        nombre: string;
+        docenteId?: mongoose.Types.ObjectId;
+        cursoId?: mongoose.Types.ObjectId;
+      }
+
+      interface IUsuario {
+        _id: mongoose.Types.ObjectId;
+        nombre: string;
+        apellidos: string;
+        email: string;
+        tipo: string;
+        info_academica?: any;
+      }
+
+      interface IEstudiante {
+        _id: mongoose.Types.ObjectId;
+        nombre: string;
+        apellidos: string;
+      }
+
+      interface IDestinatario {
+        _id: mongoose.Types.ObjectId;
+        nombre: string;
+        apellidos: string;
+        email: string;
+        tipo: string;
+        asignatura?: string;
+        curso?: string;
+        infoContextual?: string;
+      }
+
+      // Obtener los estudiantes asociados al acudiente
+      const usuario = await Usuario.findById(req.user._id).select('info_academica');
+
+      if (!usuario || !usuario.info_academica) {
+        return res.json({
+          success: true,
+          data: [],
+          message: 'No se encontró información académica del acudiente',
+        });
+      }
+
+      // Extraer estudiantes asociados (usamos any para evitar problemas de tipo)
+      const infoAcademica = usuario.info_academica as any;
+      const estudiantesIds = infoAcademica.estudiantes_asociados || [];
+
+      if (!Array.isArray(estudiantesIds) || estudiantesIds.length === 0) {
+        return res.json({
+          success: true,
+          data: [],
+          message: 'No tiene estudiantes asociados',
+        });
+      }
+
+      console.log(`[DEBUG] Estudiantes asociados: ${estudiantesIds.length}`);
+
+      // Obtener información de los estudiantes
+      const estudiantes = (await Usuario.find({
+        _id: { $in: estudiantesIds },
+        tipo: 'ESTUDIANTE',
+        estado: { $ne: 'INACTIVO' },
+      }).select('_id nombre apellidos')) as IEstudiante[];
+
+      // Crear un mapa con nombres de estudiantes para referencia
+      const estudiantesNombres = new Map<string, string>();
+      estudiantes.forEach((estudiante) => {
+        estudiantesNombres.set(
+          estudiante._id.toString(),
+          `${estudiante.nombre || ''} ${estudiante.apellidos || ''}`,
+        );
+      });
+
+      // *** CAMBIO IMPORTANTE: Buscar cursos directamente por los IDs de estudiantes ***
+      const estudiantesIdsString = estudiantes.map((est) => est._id.toString());
+      console.log(
+        `[DEBUG] Buscando cursos para los estudiantes: ${estudiantesIdsString.join(', ')}`,
+      );
+
+      // Buscar directamente los cursos donde estos estudiantes están incluidos en el array 'estudiantes'
+      const cursos = (await mongoose
+        .model('Curso')
+        .find({
+          estudiantes: { $in: estudiantesIds.map((id) => new mongoose.Types.ObjectId(id)) },
+          escuelaId: new mongoose.Types.ObjectId(req.user.escuelaId),
+          estado: { $ne: 'INACTIVO' },
+        })
+        .select(
+          '_id nombre grado seccion director_grupo grupo jornada nivel estudiantes',
+        )) as ICurso[];
+
+      console.log(`[DEBUG] Cursos encontrados: ${cursos.length}`);
+
+      // Recolectar los IDs de cursos
+      const cursosIds = new Set<string>();
+      cursos.forEach((curso) => {
+        if (curso._id) {
+          cursosIds.add(curso._id.toString());
+        }
+      });
+
+      // Si no hay cursos, solo mostrar personal administrativo (no docentes)
+      if (cursosIds.size === 0) {
+        console.log(
+          '[DEBUG] No se encontraron cursos, obteniendo solo personal administrativo (sin docentes)',
+        );
+
+        // Obtener SOLO personal administrativo de la escuela (sin docentes)
+        const personalEscuela = (await Usuario.find({
+          escuelaId: req.user.escuelaId,
+          tipo: { $in: ['ADMIN', 'RECTOR', 'COORDINADOR', 'ADMINISTRATIVO'] }, // Eliminamos 'DOCENTE'
+          estado: 'ACTIVO',
+        }).select('_id nombre apellidos email tipo')) as IUsuario[];
+
+        // Convertir a formato de destinatario
+        const destinatariosFinales: IDestinatario[] = personalEscuela.map((persona) => ({
+          _id: persona._id,
+          nombre: persona.nombre,
+          apellidos: persona.apellidos,
+          email: persona.email,
+          tipo: persona.tipo,
+        }));
+
+        return res.json({
+          success: true,
+          data: destinatariosFinales,
+          count: destinatariosFinales.length,
+          message:
+            'No se encontraron cursos para sus estudiantes. Mostrando solo personal administrativo.',
+        });
+      }
+
+      // Recolectar docentes asociados (directores de grupo y profesores de asignaturas)
+      const docentesIds = new Set<string>();
+      const directorGrupoInfo = new Map<string, string>(); // Mapa: docenteId -> cursoNombre
+
+      // Añadir directores de grupo y registrar la información
+      cursos.forEach((curso) => {
+        if (curso.director_grupo) {
+          docentesIds.add(curso.director_grupo.toString());
+          // Guardar información del curso para este director
+          let nombreCurso = curso.nombre || '';
+          if (curso.grado && curso.seccion) {
+            nombreCurso = `${curso.grado}${curso.seccion}`;
+          }
+          directorGrupoInfo.set(curso.director_grupo.toString(), nombreCurso);
+        }
+      });
+
+      // *** CAMBIO IMPORTANTE: Buscar asignaturas directamente por cursoId en lugar de usar campo asignaturas ***
+      console.log(
+        `[DEBUG] Buscando asignaturas para los cursos: ${Array.from(cursosIds).join(', ')}`,
+      );
+
+      // Consulta directa a la colección de asignaturas por cursoId
+      const asignaturas = (await mongoose
+        .model('Asignatura')
+        .find({
+          cursoId: { $in: Array.from(cursosIds).map((id) => new mongoose.Types.ObjectId(id)) },
+          estado: 'ACTIVO',
+        })
+        .select('_id nombre docenteId cursoId')) as IAsignatura[];
+
+      console.log(`[DEBUG] Asignaturas encontradas por consulta directa: ${asignaturas.length}`);
+
+      if (asignaturas.length > 0) {
+        console.log(
+          '[DEBUG] Ejemplo de primera asignatura:',
+          JSON.stringify({
+            id: asignaturas[0]._id.toString(),
+            nombre: asignaturas[0].nombre,
+            docenteId: asignaturas[0].docenteId
+              ? asignaturas[0].docenteId.toString()
+              : 'no docente',
+            cursoId: asignaturas[0].cursoId ? asignaturas[0].cursoId.toString() : 'no curso',
+          }),
+        );
+      }
+
+      // Mapear información de asignaturas
+      const asignaturasMap = new Map<string, { nombre: string; docenteId: string | null }>();
+      const asignaturasPorCurso = new Map<string, string[]>();
+
+      // Procesar las asignaturas y recolectar los IDs de docentes
+      asignaturas.forEach((asignatura) => {
+        if (asignatura._id) {
+          // Guardar información sobre la asignatura
+          asignaturasMap.set(asignatura._id.toString(), {
+            nombre: asignatura.nombre || '',
+            docenteId: asignatura.docenteId ? asignatura.docenteId.toString() : null,
+          });
+
+          // Agregar el docente a la lista de docentes
+          if (asignatura.docenteId) {
+            docentesIds.add(asignatura.docenteId.toString());
+          }
+
+          // Asociar asignatura con su curso
+          if (asignatura.cursoId) {
+            const cursoId = asignatura.cursoId.toString();
+            if (!asignaturasPorCurso.has(cursoId)) {
+              asignaturasPorCurso.set(cursoId, []);
+            }
+
+            const asignaturasDelCurso = asignaturasPorCurso.get(cursoId);
+            if (asignaturasDelCurso) {
+              asignaturasDelCurso.push(asignatura._id.toString());
+            }
+          }
+        }
+      });
+
+      // Log para debugging
+      console.log(`[DEBUG] Docentes encontrados (IDs): ${Array.from(docentesIds).join(', ')}`);
+
+      // Obtener información de coordinadores, administrativos y directivos de la escuela
+      const personalAdministrativo = (await Usuario.find({
+        escuelaId: req.user.escuelaId,
+        tipo: { $in: ['ADMIN', 'RECTOR', 'COORDINADOR', 'ADMINISTRATIVO'] },
+        estado: 'ACTIVO',
+      }).select('_id nombre apellidos email tipo')) as IUsuario[];
+
+      // Obtener información de los docentes
+      const docentes = (await Usuario.find({
+        _id: { $in: Array.from(docentesIds).map((id) => new mongoose.Types.ObjectId(id)) },
+        tipo: 'DOCENTE',
+        estado: 'ACTIVO',
+      }).select('_id nombre apellidos email tipo')) as IUsuario[];
+
+      console.log(`[DEBUG] Docentes recuperados de la base de datos: ${docentes.length}`);
+
+      if (docentes.length > 0) {
+        console.log('[DEBUG] Lista de docentes encontrados:');
+        docentes.forEach((docente) => {
+          console.log(`- ${docente._id.toString()}: ${docente.nombre} ${docente.apellidos}`);
+        });
+      }
+
+      // Mapear asignaturas por docente
+      const docenteAsignaturas = new Map<string, Set<string>>();
+      const docenteCursos = new Map<string, Set<string>>();
+
+      // Para cada asignatura, asignar docentes
+      asignaturas.forEach((asignatura) => {
+        if (asignatura.docenteId && asignatura.cursoId) {
+          const docenteId = asignatura.docenteId.toString();
+          const cursoId = asignatura.cursoId.toString();
+
+          // Obtener el curso correspondiente
+          const curso = cursos.find((c) => c._id.toString() === cursoId);
+
+          if (curso) {
+            // Añadir asignatura al docente
+            if (!docenteAsignaturas.has(docenteId)) {
+              docenteAsignaturas.set(docenteId, new Set<string>());
+            }
+            const asignaturasSet = docenteAsignaturas.get(docenteId);
+            if (asignaturasSet && asignatura.nombre) {
+              asignaturasSet.add(asignatura.nombre);
+            }
+
+            // Añadir curso al docente
+            if (!docenteCursos.has(docenteId)) {
+              docenteCursos.set(docenteId, new Set<string>());
+            }
+            const cursosSet = docenteCursos.get(docenteId);
+            if (cursosSet) {
+              let nombreCurso = curso.nombre || '';
+              if (curso.grado && curso.seccion) {
+                nombreCurso = `${curso.grado}${curso.seccion}`;
+              }
+              cursosSet.add(nombreCurso);
+            }
+          }
+        }
+      });
+
+      // Construir lista final de destinatarios con información contextual
+      const destinatariosFinales: IDestinatario[] = [];
+
+      // Añadir docentes con información de asignaturas y cursos
+      docentes.forEach((docente) => {
+        if (docente._id) {
+          const docenteId = docente._id.toString();
+
+          // Información de asignaturas
+          const asignaturasSet = docenteAsignaturas.get(docenteId);
+          const cursosSet = docenteCursos.get(docenteId);
+
+          const asignaturas =
+            asignaturasSet && asignaturasSet.size > 0 ? Array.from(asignaturasSet).join(', ') : '';
+
+          // Información de cursos y si es director de grupo
+          let cursosStr = cursosSet && cursosSet.size > 0 ? Array.from(cursosSet).join(', ') : '';
+
+          // Añadir información de director de grupo si aplica
+          const cursoDirector = directorGrupoInfo.get(docenteId);
+          if (cursoDirector) {
+            if (cursosStr) {
+              cursosStr += ` (Director de ${cursoDirector})`;
+            } else {
+              cursosStr = `Director de ${cursoDirector}`;
+            }
+          }
+
+          // Obtener los estudiantes relacionados para este docente
+          const estudiantesRelacionados: string[] = [];
+
+          // Verificar estudiantes en cursos donde este docente es director de grupo
+          const cursosDirector = cursos.filter(
+            (curso) => curso.director_grupo && curso.director_grupo.toString() === docenteId,
+          );
+
+          for (const curso of cursosDirector) {
+            if (Array.isArray(curso.estudiantes)) {
+              const estudiantesEnCurso = estudiantes.filter((est) =>
+                curso.estudiantes?.some(
+                  (id: mongoose.Types.ObjectId) => id.toString() === est._id.toString(),
+                ),
+              );
+
+              estudiantesEnCurso.forEach((est) => {
+                estudiantesRelacionados.push(`${est.nombre} ${est.apellidos}`);
+              });
+            }
+          }
+
+          // Verificar estudiantes en cursos donde este docente enseña asignaturas
+          const cursosAsignaturas = cursos.filter((curso) => {
+            if (!curso._id) return false;
+
+            // Obtener asignaturas de este curso y docente
+            const asignaturasDelCurso = asignaturasPorCurso.get(curso._id.toString()) || [];
+
+            // Verificar si alguna asignatura tiene a este docente como profesor
+            return asignaturasDelCurso.some((asigId) => {
+              const asigInfo = asignaturasMap.get(asigId);
+              return asigInfo && asigInfo.docenteId === docenteId;
+            });
+          });
+
+          for (const curso of cursosAsignaturas) {
+            if (Array.isArray(curso.estudiantes)) {
+              const estudiantesEnCurso = estudiantes.filter((est) =>
+                curso.estudiantes?.some(
+                  (id: mongoose.Types.ObjectId) => id.toString() === est._id.toString(),
+                ),
+              );
+
+              estudiantesEnCurso.forEach((est) => {
+                if (!estudiantesRelacionados.includes(`${est.nombre} ${est.apellidos}`)) {
+                  estudiantesRelacionados.push(`${est.nombre} ${est.apellidos}`);
+                }
+              });
+            }
+          }
+
+          // Información contextualizada
+          let infoContextual = '';
+          if (estudiantesRelacionados.length > 0) {
+            infoContextual = `Docente de ${estudiantesRelacionados.join(', ')}`;
+          }
+
+          destinatariosFinales.push({
+            _id: docente._id,
+            nombre: docente.nombre || '',
+            apellidos: docente.apellidos || '',
+            email: docente.email || '',
+            tipo: docente.tipo || '',
+            asignatura: asignaturas,
+            curso: cursosStr,
+            infoContextual: infoContextual,
+          });
+        }
+      });
+
+      // Añadir personal administrativo
+      personalAdministrativo.forEach((admin) => {
+        if (admin._id) {
+          destinatariosFinales.push({
+            _id: admin._id,
+            nombre: admin.nombre || '',
+            apellidos: admin.apellidos || '',
+            email: admin.email || '',
+            tipo: admin.tipo || '',
+          });
+        }
+      });
+
+      console.log(`[DEBUG] Total destinatarios encontrados: ${destinatariosFinales.length}`);
+
+      return res.json({
+        success: true,
+        data: destinatariosFinales,
+        count: destinatariosFinales.length,
+      });
+    } catch (error) {
+      console.error('Error al obtener destinatarios para acudiente:', error);
+      return next(error);
+    }
+  }
+
+  // Método para obtener cursos disponibles para mensajes masivos
+  async getCursosPosiblesDestinatarios(
+    req: RequestWithUser,
+    res: Response,
+    next: NextFunction,
+  ): Promise<any> {
+    try {
+      if (!req.user) {
+        throw new ApiError(401, 'No autorizado');
+      }
+
+      console.log(
+        `[DEBUG] Obteniendo cursos disponibles para usuario: ${req.user._id}, tipo: ${req.user.tipo}`,
+      );
+
+      // Definir roles que pueden enviar mensajes masivos
+      const rolesMasivos = ['ADMIN', 'RECTOR', 'COORDINADOR', 'ADMINISTRATIVO', 'DOCENTE'];
+
+      if (!rolesMasivos.includes(req.user.tipo)) {
+        throw new ApiError(403, 'No tiene permisos para enviar mensajes masivos');
+      }
+
+      // Aplicar lógica según el rol
+      let cursos: any[] = [];
+
+      // 1. ADMIN, RECTOR, COORDINADOR, ADMINISTRATIVO: pueden ver todos los cursos
+      if (['ADMIN', 'RECTOR', 'COORDINADOR', 'ADMINISTRATIVO'].includes(req.user.tipo)) {
+        console.log('[DEBUG] Usuario administrativo - Mostrando todos los cursos');
+
+        // Obtener todos los cursos de la escuela
+        cursos = await mongoose
+          .model('Curso')
+          .find({
+            escuelaId: new mongoose.Types.ObjectId(req.user.escuelaId),
+          })
+          .select('_id nombre grado seccion grupo estudiantes director_grupo')
+          .populate('director_grupo', 'nombre apellidos')
+          .populate({
+            path: 'estudiantes',
+            select: '_id',
+            match: { estado: 'ACTIVO' },
+          })
+          .sort({ grado: 1, seccion: 1 });
+      }
+
+      // 2. DOCENTES: solo pueden ver cursos donde dictan asignaturas
+      else if (req.user.tipo === 'DOCENTE') {
+        console.log('[DEBUG] Usuario docente - Obteniendo cursos donde dicta asignaturas');
+
+        // 2.1 Primero, buscar cursos donde es director de grupo
+        const cursosDirigidos = await mongoose
+          .model('Curso')
+          .find({
+            director_grupo: new mongoose.Types.ObjectId(req.user._id),
+            escuelaId: new mongoose.Types.ObjectId(req.user.escuelaId),
+          })
+          .select('_id');
+
+        // 2.2 Luego, buscar asignaturas que dicta
+        const asignaturas = await mongoose
+          .model('Asignatura')
+          .find({
+            docenteId: new mongoose.Types.ObjectId(req.user._id),
+            escuelaId: new mongoose.Types.ObjectId(req.user.escuelaId),
+          })
+          .select('cursoId');
+
+        // 2.3 Recolectar todos los IDs de cursos únicos
+        const cursosIds = new Set<string>();
+
+        cursosDirigidos.forEach((curso) => {
+          cursosIds.add(curso._id.toString());
+        });
+
+        asignaturas.forEach((asig) => {
+          if (asig.cursoId) {
+            cursosIds.add(asig.cursoId.toString());
+          }
+        });
+
+        if (cursosIds.size === 0) {
+          console.log('[DEBUG] Docente no tiene cursos asignados');
+          return res.json({
+            success: true,
+            data: [],
+            message: 'No tiene cursos asignados para enviar mensajes masivos',
+          });
+        }
+
+        // 2.4 Obtener información completa de esos cursos
+        cursos = await mongoose
+          .model('Curso')
+          .find({
+            _id: { $in: Array.from(cursosIds).map((id) => new mongoose.Types.ObjectId(id)) },
+          })
+          .select('_id nombre grado seccion grupo estudiantes director_grupo')
+          .populate('director_grupo', 'nombre apellidos')
+          .populate({
+            path: 'estudiantes',
+            select: '_id',
+            match: { estado: 'ACTIVO' },
+          })
+          .sort({ grado: 1, seccion: 1 });
+      }
+
+      // Formatear respuesta con conteo de estudiantes y más información
+      const cursosFormateados = cursos.map((curso) => {
+        const cantidadEstudiantes = Array.isArray(curso.estudiantes) ? curso.estudiantes.length : 0;
+
+        // Construir un nombre más informativo que incluya grado, sección y grupo
+        let nombreCompleto = curso.nombre || '';
+
+        // Si el nombre no incluye ya el grado y sección, añadirlos
+        if (!nombreCompleto.includes(curso.grado) && curso.grado) {
+          nombreCompleto = `${curso.grado}`;
+          if (curso.seccion) {
+            nombreCompleto += `${curso.seccion}`;
+          }
+        }
+
+        // Añadir el grupo si existe y no está ya incluido en el nombre
+        if (curso.grupo && !nombreCompleto.includes(curso.grupo)) {
+          nombreCompleto += ` - Grupo ${curso.grupo}`;
+        }
+
+        // Si hay un director de grupo, incluir su nombre
+        let infoAdicional = '';
+        if (curso.director_grupo) {
+          try {
+            // Si director_grupo está populado, usar directamente; si no, buscar información
+            const directorInfo =
+              typeof curso.director_grupo === 'object' && curso.director_grupo.nombre
+                ? `${curso.director_grupo.nombre} ${curso.director_grupo.apellidos || ''}`
+                : ''; // Si no podemos obtener el nombre, dejarlo vacío
+
+            if (directorInfo) {
+              infoAdicional = `Director: ${directorInfo}`;
+            }
+          } catch (err) {
+            console.error('Error obteniendo información del director de grupo:', err);
+          }
+        }
+
+        return {
+          _id: curso._id,
+          nombre: nombreCompleto,
+          grado: curso.grado || '',
+          seccion: curso.seccion || '',
+          grupo: curso.grupo || '',
+          cantidadEstudiantes,
+          infoAdicional,
+        };
+      });
+
+      console.log(`[DEBUG] Cursos encontrados: ${cursosFormateados.length}`);
+
+      return res.json({
+        success: true,
+        data: cursosFormateados,
+      });
+    } catch (error) {
+      console.error('Error al obtener cursos para mensajes masivos:', error);
+      return next(error);
+    }
+  }
+
+  // Crear un nuevo mensaje (actualizado para usar el servicio)
+  async crear(req: RequestWithUser, res: Response, next: NextFunction) {
+    try {
+      if (!req.user) {
+        throw new ApiError(401, 'No autorizado');
+      }
+
+      // Verificar si el usuario es estudiante
+      if (req.user.tipo === 'ESTUDIANTE') {
+        throw new ApiError(403, 'Los estudiantes no pueden enviar mensajes');
+      }
+
+      // Obtener datos del mensaje
+      const {
+        destinatarios,
+        destinatariosCc,
+        cursoIds,
         asunto,
         contenido,
         tipo = TipoMensaje.INDIVIDUAL,
@@ -55,13 +1309,30 @@ export class MensajeController {
       } = req.body;
 
       // Comprobar que el mensaje tenga al menos un destinatario
-      if (!destinatarios || (Array.isArray(destinatarios) && destinatarios.length === 0)) {
-        throw new ApiError(400, 'Debe especificar al menos un destinatario');
+      if (
+        (!destinatarios || (Array.isArray(destinatarios) && destinatarios.length === 0)) &&
+        (!cursoIds || (Array.isArray(cursoIds) && cursoIds.length === 0))
+      ) {
+        throw new ApiError(400, 'Debe especificar al menos un destinatario o curso');
       }
 
       // Crear adjuntos si hay archivos
       const adjuntos = [];
       if (req.files && req.files.length > 0) {
+        // Verificación de tamaño total
+        const totalSize = req.files.reduce((sum, file) => sum + file.size, 0);
+        const MAX_TOTAL_SIZE = 15 * 1024 * 1024; // 15MB
+
+        if (totalSize > MAX_TOTAL_SIZE) {
+          throw new ApiError(
+            400,
+            `El tamaño total de los archivos adjuntos no puede superar los 15MB (tamaño actual: ${(
+              totalSize /
+              (1024 * 1024)
+            ).toFixed(2)}MB)`,
+          );
+        }
+
         const bucket = gridfsManager.getBucket();
         if (!bucket) {
           throw new ApiError(500, 'Servicio de archivos no disponible');
@@ -107,7 +1378,7 @@ export class MensajeController {
       }
 
       // Parsear destinatarios
-      let destinatariosArray = [];
+      let destinatariosArray: string[] = [];
       if (typeof destinatarios === 'string') {
         // Si es un JSON string
         try {
@@ -121,7 +1392,7 @@ export class MensajeController {
       }
 
       // Parsear destinatariosCc
-      let destinatariosCcArray = [];
+      let destinatariosCcArray: string[] = [];
       if (destinatariosCc) {
         if (typeof destinatariosCc === 'string') {
           try {
@@ -134,76 +1405,57 @@ export class MensajeController {
         }
       }
 
-      // Crear mensaje
-      const nuevoMensaje = await Mensaje.create({
-        remitente: req.user._id,
+      // Parsear cursoIds
+      let cursoIdsArray: string[] = [];
+      if (cursoIds) {
+        if (typeof cursoIds === 'string') {
+          try {
+            cursoIdsArray = JSON.parse(cursoIds);
+          } catch (error) {
+            cursoIdsArray = [cursoIds];
+          }
+        } else if (Array.isArray(cursoIds)) {
+          cursoIdsArray = cursoIds;
+        }
+      }
+
+      // Datos completos para el servicio
+      const datosMensaje = {
         destinatarios: destinatariosArray,
         destinatariosCc: destinatariosCcArray,
+        cursoIds: cursoIdsArray,
         asunto,
         contenido,
+        adjuntos,
         tipo,
         prioridad: prioridad || PrioridadMensaje.NORMAL,
         estado,
         etiquetas: etiquetas || [],
-        adjuntos,
-        escuelaId: req.user.escuelaId,
         esRespuesta: esRespuesta === 'true' || esRespuesta === true,
         mensajeOriginalId: mensajeOriginalId || null,
-        lecturas: [],
-      });
+      };
 
-      // Si no es borrador, enviar notificaciones por email y crear notificaciones
-      if (estado !== EstadoMensaje.BORRADOR) {
-        // Obtener información de todos los destinatarios
-        const usuarios = await Usuario.find({
-          _id: { $in: [...destinatariosArray, ...destinatariosCcArray] },
-        });
+      // Usar el servicio para crear el mensaje
+      const nuevoMensaje = await mensajeService.crearMensaje(datosMensaje, req.user);
 
-        // Obtener nombre del remitente
-        const nombreRemitente = `${req.user.nombre || ''} ${req.user.apellidos || ''}`.trim();
+      // Enviar copias a acudientes si hay estudiantes en los destinatarios
+      // Esto solo es necesario si no se han incluido cursos, ya que el servicio
+      // ya incluye a los acudientes cuando se seleccionan cursos
+      if (cursoIdsArray.length === 0 && destinatariosArray.length > 0) {
+        // Encontrar destinatarios que son estudiantes
+        // Hacemos la consulta de forma asíncrona y correcta
+        const estudiantesInfo = await Usuario.find({
+          _id: { $in: destinatariosArray },
+          tipo: 'ESTUDIANTE',
+        }).select('_id');
 
-        // Para cada destinatario, enviar notificación por email
-        for (const usuario of usuarios) {
-          if (usuario.email) {
-            await emailService.sendMensajeNotification(usuario.email, {
-              remitente: nombreRemitente,
-              asunto,
-              fecha: new Date(),
-              tieneAdjuntos: adjuntos.length > 0,
-              url: `${config.frontendUrl}/mensajes/${nuevoMensaje._id}`,
-            });
-          }
-        }
+        const estudiantesIds = estudiantesInfo.map((est: any) => est._id.toString());
 
-        // Crear notificaciones para los destinatarios
-        const mensajeId = (nuevoMensaje as any)._id.toString();
-        for (const destinatarioId of [...destinatariosArray, ...destinatariosCcArray]) {
-          await notificacionService.crearNotificacion({
-            usuarioId: destinatarioId,
-            titulo: `Nuevo mensaje: ${asunto}`,
-            mensaje: `Has recibido un nuevo mensaje de ${nombreRemitente}`,
-            tipo: TipoNotificacion.MENSAJE,
-            escuelaId: req.user.escuelaId,
-            entidadId: mensajeId,
-            entidadTipo: 'Mensaje',
-            metadata: {
-              remitente: nombreRemitente,
-              tieneAdjuntos: adjuntos.length > 0,
-              mensajeId: mensajeId,
-              url: `${config.frontendUrl}/mensajes/${nuevoMensaje._id}`,
-            },
-            // No enviamos email aquí porque ya lo hacemos por separado
-            enviarEmail: false,
-          });
+        // Enviar mensajes a acudientes para cada estudiante
+        for (const estudianteId of estudiantesIds) {
+          await mensajeService.enviarCopiaAcudientes(estudianteId, datosMensaje, req.user);
         }
       }
-
-      // Devolver mensaje creado
-      await nuevoMensaje.populate([
-        { path: 'remitente', select: 'nombre apellidos email tipo' },
-        { path: 'destinatarios', select: 'nombre apellidos email tipo' },
-        { path: 'destinatariosCc', select: 'nombre apellidos email tipo' },
-      ]);
 
       res.status(201).json({
         success: true,
@@ -215,7 +1467,6 @@ export class MensajeController {
     }
   }
 
-  // Obtener todos los mensajes enviados/recibidos
   async obtenerTodos(req: RequestWithUser, res: Response, next: NextFunction) {
     try {
       if (!req.user) {
@@ -230,7 +1481,6 @@ export class MensajeController {
         busqueda,
         desde,
         hasta,
-        estado,
       } = req.query;
 
       const opciones = {
@@ -238,68 +1488,176 @@ export class MensajeController {
         limite: parseInt(limite as string, 10),
       };
 
-      // Construir filtro según la bandeja
-      const filtro: any = {
-        escuelaId: req.user.escuelaId,
-      };
+      const usuarioId = new mongoose.Types.ObjectId(req.user._id);
+      const escuelaId = new mongoose.Types.ObjectId(req.user.escuelaId);
 
+      // Pipeline de agregación para filtrar mensajes según los estados del usuario
+      const pipeline: any[] = [
+        {
+          $match: {
+            escuelaId: escuelaId,
+          },
+        },
+      ];
+
+      // Filtro por tipo de mensaje
       if (tipo) {
-        filtro.tipo = tipo;
+        pipeline.push({ $match: { tipo } });
       }
 
-      if (estado) {
-        filtro.estado = estado;
-      }
-
-      // Filtro según bandeja
-      if (bandeja === 'recibidos') {
-        filtro.destinatarios = req.user._id;
-        filtro.estado = { $ne: EstadoMensaje.BORRADOR };
-      } else if (bandeja === 'enviados') {
-        filtro.remitente = req.user._id;
-        filtro.estado = { $ne: EstadoMensaje.BORRADOR };
-      } else if (bandeja === 'borradores') {
-        filtro.remitente = req.user._id;
-        filtro.estado = EstadoMensaje.BORRADOR;
-      } else if (bandeja === 'archivados') {
-        filtro.$or = [
-          { remitente: req.user._id, estado: EstadoMensaje.ARCHIVADO },
-          { destinatarios: req.user._id, estado: EstadoMensaje.ARCHIVADO },
-        ];
+      // Filtro por fecha
+      if (desde || hasta) {
+        const matchFecha: any = {};
+        if (desde) {
+          matchFecha.createdAt = { $gte: new Date(desde as string) };
+        }
+        if (hasta) {
+          if (matchFecha.createdAt) {
+            matchFecha.createdAt.$lte = new Date(hasta as string);
+          } else {
+            matchFecha.createdAt = { $lte: new Date(hasta as string) };
+          }
+        }
+        pipeline.push({ $match: matchFecha });
       }
 
       // Filtro de búsqueda por asunto o contenido
       if (busqueda) {
         const regex = new RegExp(busqueda as string, 'i');
-        filtro.$or = [{ asunto: regex }, { contenido: regex }];
+        pipeline.push({
+          $match: {
+            $or: [{ asunto: regex }, { contenido: regex }],
+          },
+        });
       }
 
-      // Filtro por fecha
-      if (desde || hasta) {
-        filtro.createdAt = {};
-        if (desde) {
-          filtro.createdAt.$gte = new Date(desde as string);
+      // Añadimos un campo para indicar si el usuario es remitente o destinatario
+      pipeline.push({
+        $addFields: {
+          esRemitente: { $eq: ['$remitente', usuarioId] },
+          esDestinatario: { $in: [usuarioId, '$destinatarios'] },
+          esDestinatarioCc: { $in: [usuarioId, '$destinatariosCc'] },
+          estadoUsuario: {
+            $let: {
+              vars: {
+                estadoObj: {
+                  $arrayElemAt: [
+                    {
+                      $filter: {
+                        input: { $ifNull: ['$estadosUsuarios', []] },
+                        as: 'estado',
+                        cond: { $eq: ['$$estado.usuarioId', usuarioId] },
+                      },
+                    },
+                    0,
+                  ],
+                },
+              },
+              in: { $ifNull: ['$$estadoObj.estado', '$estado'] }, // Fallback al estado global
+            },
+          },
+        },
+      });
+
+      // Filtros específicos según la bandeja
+      const matchBandeja: any = {};
+
+      if (bandeja === 'recibidos') {
+        matchBandeja.$or = [{ esDestinatario: true }, { esDestinatarioCc: true }];
+        // Solo mostrar mensajes ENVIADOS (excluir ARCHIVADOS, ELIMINADOS y BORRADORES)
+        matchBandeja.estadoUsuario = EstadoMensaje.ENVIADO;
+        matchBandeja.tipo = { $ne: TipoMensaje.BORRADOR };
+      } else if (bandeja === 'enviados') {
+        matchBandeja.esRemitente = true;
+        matchBandeja.estadoUsuario = { $ne: EstadoMensaje.ELIMINADO };
+        matchBandeja.tipo = { $ne: TipoMensaje.BORRADOR };
+      } else if (bandeja === 'borradores') {
+        // Verificar que el usuario tiene permiso para acceder a borradores
+        if (!ROLES_CON_BORRADORES.includes(req.user.tipo)) {
+          return res.json({
+            success: true,
+            data: [],
+            meta: {
+              total: 0,
+              pagina: opciones.pagina,
+              limite: opciones.limite,
+              totalPaginas: 0,
+            },
+            message: 'No tiene permisos para acceder a borradores',
+          });
         }
-        if (hasta) {
-          filtro.createdAt.$lte = new Date(hasta as string);
-        }
+
+        matchBandeja.esRemitente = true;
+        matchBandeja.tipo = TipoMensaje.BORRADOR;
+      } else if (bandeja === 'archivados') {
+        matchBandeja.$or = [
+          { esRemitente: true },
+          { esDestinatario: true },
+          { esDestinatarioCc: true },
+        ];
+        matchBandeja.estadoUsuario = EstadoMensaje.ARCHIVADO;
+      } else if (bandeja === 'eliminados') {
+        matchBandeja.$or = [
+          { esRemitente: true },
+          { esDestinatario: true },
+          { esDestinatarioCc: true },
+        ];
+        matchBandeja.estadoUsuario = EstadoMensaje.ELIMINADO;
       }
 
-      // Ejecutar consulta paginada
-      const skip = (opciones.pagina - 1) * opciones.limite;
-      const mensajes = await Mensaje.find(filtro)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(opciones.limite)
-        .populate([
-          { path: 'remitente', select: 'nombre apellidos email tipo' },
-          { path: 'destinatarios', select: 'nombre apellidos email tipo' },
-        ]);
+      pipeline.push({ $match: matchBandeja });
 
-      // Contar total de mensajes
-      const total = await Mensaje.countDocuments(filtro);
+      // Lookup para obtener información de remitentes y destinatarios
+      pipeline.push(
+        {
+          $lookup: {
+            from: 'usuarios',
+            localField: 'remitente',
+            foreignField: '_id',
+            as: 'remitenteInfo',
+          },
+        },
+        {
+          $lookup: {
+            from: 'usuarios',
+            localField: 'destinatarios',
+            foreignField: '_id',
+            as: 'destinatariosInfo',
+          },
+        },
+        {
+          $addFields: {
+            remitente: { $arrayElemAt: ['$remitenteInfo', 0] },
+            destinatarios: '$destinatariosInfo',
+          },
+        },
+        {
+          $project: {
+            remitenteInfo: 0,
+            destinatariosInfo: 0,
+            'remitente.password': 0,
+            'destinatarios.password': 0,
+          },
+        },
+      );
 
-      res.json({
+      // Conteo total
+      const totalPipeline = [...pipeline];
+      const countResult = await Mensaje.aggregate([...totalPipeline, { $count: 'total' }]);
+
+      const total = countResult.length > 0 ? countResult[0].total : 0;
+
+      // Ordenar, saltar y limitar resultados
+      pipeline.push(
+        { $sort: { createdAt: -1 } },
+        { $skip: (opciones.pagina - 1) * opciones.limite },
+        { $limit: opciones.limite },
+      );
+
+      // Ejecutar la consulta
+      const mensajes = await Mensaje.aggregate(pipeline);
+
+      return res.json({
         success: true,
         data: mensajes,
         meta: {
@@ -310,11 +1668,10 @@ export class MensajeController {
         },
       });
     } catch (error) {
-      next(error);
+      return next(error);
     }
   }
 
-  // Obtener un mensaje específico por ID
   async obtenerPorId(req: RequestWithUser, res: Response, next: NextFunction) {
     try {
       if (!req.user) {
@@ -323,15 +1680,32 @@ export class MensajeController {
 
       const { id } = req.params;
 
-      // Buscar mensaje
-      const mensaje = await Mensaje.findOne({
-        _id: id,
+      // Validar ID antes de usar
+      if (!mongoose.isValidObjectId(id)) {
+        throw new ApiError(400, 'ID de mensaje inválido');
+      }
+
+      // Validar también el ID del usuario
+      const userObjId = mongoose.isValidObjectId(req.user._id)
+        ? new mongoose.Types.ObjectId(req.user._id)
+        : null;
+
+      if (!userObjId) {
+        throw new ApiError(400, 'ID de usuario inválido');
+      }
+
+      // Construir una consulta más segura
+      const matchQuery = {
+        _id: new mongoose.Types.ObjectId(id),
         $or: [
-          { remitente: req.user._id },
-          { destinatarios: req.user._id },
-          { destinatariosCc: req.user._id },
+          { remitente: userObjId },
+          { destinatarios: userObjId },
+          { destinatariosCc: userObjId },
         ],
-      }).populate([
+      };
+
+      // Buscar mensaje con validación mejorada
+      const mensaje = await Mensaje.findOne(matchQuery).populate([
         { path: 'remitente', select: 'nombre apellidos email tipo' },
         { path: 'destinatarios', select: 'nombre apellidos email tipo' },
         { path: 'destinatariosCc', select: 'nombre apellidos email tipo' },
@@ -342,16 +1716,27 @@ export class MensajeController {
         throw new ApiError(404, 'Mensaje no encontrado');
       }
 
+      // La parte que probablemente causa el error - mejorada con validaciones
       // Si el usuario es un destinatario y no ha leído el mensaje, marcarlo como leído
-      if (
-        mensaje.destinatarios.some((d) => (d as any)._id.toString() === req.user?._id) ||
-        (mensaje.destinatariosCc &&
-          mensaje.destinatariosCc.some((d) => (d as any)._id.toString() === req.user?._id))
-      ) {
-        // Verificar si el usuario ya leyó el mensaje
-        if (mensaje.lecturas) {
-          const yaLeido = mensaje.lecturas.some(
-            (l: ILectura) => l.usuarioId.toString() === req.user?._id,
+      if (mensaje.destinatarios && Array.isArray(mensaje.destinatarios)) {
+        const destinatarioIds = mensaje.destinatarios
+          .filter((d) => d && (d as any)._id) // Filtrar valores nulos o indefinidos
+          .map((d) => (d as any)._id.toString());
+
+        const destinatariosCcIds =
+          mensaje.destinatariosCc && Array.isArray(mensaje.destinatariosCc)
+            ? mensaje.destinatariosCc
+                .filter((d) => d && (d as any)._id) // Filtrar valores nulos o indefinidos
+                .map((d) => (d as any)._id.toString())
+            : [];
+
+        const userIdStr = req.user._id.toString();
+
+        if (destinatarioIds.includes(userIdStr) || destinatariosCcIds.includes(userIdStr)) {
+          // Verificar si el usuario ya leyó el mensaje
+          const lecturas = mensaje.lecturas || [];
+          const yaLeido = lecturas.some(
+            (l: any) => l && l.usuarioId && l.usuarioId.toString() === userIdStr,
           );
 
           // Si no lo ha leído, marcar como leído
@@ -361,28 +1746,13 @@ export class MensajeController {
               {
                 $push: {
                   lecturas: {
-                    usuarioId: req.user?._id,
+                    usuarioId: userObjId,
                     fechaLectura: new Date(),
                   },
                 },
               },
             );
           }
-        } else {
-          // Si no hay lecturas, inicializar el array
-          await Mensaje.updateOne(
-            { _id: id },
-            {
-              $set: {
-                lecturas: [
-                  {
-                    usuarioId: req.user?._id,
-                    fechaLectura: new Date(),
-                  },
-                ],
-              },
-            },
-          );
         }
       }
 
@@ -391,11 +1761,11 @@ export class MensajeController {
         data: mensaje,
       });
     } catch (error) {
+      console.error('Error al obtener mensaje por ID:', error);
       next(error);
     }
   }
 
-  // Marcar mensaje como archivado
   async archivar(req: RequestWithUser, res: Response, next: NextFunction) {
     try {
       if (!req.user) {
@@ -407,15 +1777,49 @@ export class MensajeController {
       // Verificar que el mensaje existe y el usuario tiene acceso
       const mensaje = await Mensaje.findOne({
         _id: id,
-        $or: [{ remitente: req.user._id }, { destinatarios: req.user._id }],
+        $or: [
+          { remitente: req.user._id },
+          { destinatarios: req.user._id },
+          { destinatariosCc: req.user._id },
+        ],
       });
 
       if (!mensaje) {
         throw new ApiError(404, 'Mensaje no encontrado');
       }
 
-      // Actualizar estado a ARCHIVADO
-      await Mensaje.updateOne({ _id: id }, { estado: EstadoMensaje.ARCHIVADO });
+      // Verificar si el usuario puede archivar este mensaje (no debe estar eliminado)
+      if (mensaje.estadosUsuarios && mensaje.estadosUsuarios.length > 0) {
+        const estadoUsuario = mensaje.estadosUsuarios.find(
+          (eu: any) => eu.usuarioId.toString() === (req.user as NonNullable<typeof req.user>)._id,
+        );
+
+        if (estadoUsuario && estadoUsuario.estado === EstadoMensaje.ELIMINADO) {
+          throw new ApiError(400, 'No se puede archivar un mensaje que está en la papelera');
+        }
+      }
+
+      // Usar $set directamente en vez de método del modelo para evitar problemas con tipos
+      await Mensaje.updateOne(
+        {
+          _id: id,
+          $or: [
+            { 'estadosUsuarios.usuarioId': new mongoose.Types.ObjectId(req.user._id) },
+            { 'estadosUsuarios.usuarioId': { $exists: false } },
+          ],
+        },
+        {
+          $set: {
+            'estadosUsuarios.$[elem].estado': EstadoMensaje.ARCHIVADO,
+            'estadosUsuarios.$[elem].fechaAccion': new Date(),
+            fechaAccion: new Date(),
+          },
+        },
+        {
+          arrayFilters: [{ 'elem.usuarioId': new mongoose.Types.ObjectId(req.user._id) }],
+          upsert: true,
+        },
+      );
 
       res.json({
         success: true,
@@ -426,7 +1830,242 @@ export class MensajeController {
     }
   }
 
-  // Descargar un archivo adjunto
+  async desarchivar(req: RequestWithUser, res: Response, next: NextFunction) {
+    try {
+      if (!req.user) {
+        throw new ApiError(401, 'No autorizado');
+      }
+
+      const { id } = req.params;
+
+      // Verificar que el mensaje existe y el usuario tiene acceso
+      const mensaje = await Mensaje.findOne({
+        _id: id,
+        $or: [
+          { remitente: req.user._id },
+          { destinatarios: req.user._id },
+          { destinatariosCc: req.user._id },
+        ],
+      });
+
+      if (!mensaje) {
+        throw new ApiError(404, 'Mensaje no encontrado');
+      }
+
+      // Verificar si el mensaje está archivado para este usuario
+      let estaArchivado = false;
+
+      if (mensaje.estadosUsuarios && mensaje.estadosUsuarios.length > 0) {
+        const estadoUsuario = mensaje.estadosUsuarios.find(
+          (eu: any) => eu.usuarioId.toString() === req.user!._id,
+        );
+
+        if (estadoUsuario && estadoUsuario.estado === EstadoMensaje.ARCHIVADO) {
+          estaArchivado = true;
+        }
+      } else if (mensaje.estado === EstadoMensaje.ARCHIVADO) {
+        estaArchivado = true;
+      }
+
+      if (!estaArchivado) {
+        throw new ApiError(400, 'El mensaje no está archivado');
+      }
+
+      // Usar $set directamente
+      await Mensaje.updateOne(
+        {
+          _id: id,
+          'estadosUsuarios.usuarioId': new mongoose.Types.ObjectId(req.user._id),
+        },
+        {
+          $set: {
+            'estadosUsuarios.$[elem].estado': EstadoMensaje.ENVIADO,
+            'estadosUsuarios.$[elem].fechaAccion': new Date(),
+            fechaAccion: new Date(),
+          },
+        },
+        {
+          arrayFilters: [{ 'elem.usuarioId': new mongoose.Types.ObjectId(req.user._id) }],
+        },
+      );
+
+      res.json({
+        success: true,
+        message: 'Mensaje desarchivado exitosamente',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // Método para eliminar mensaje (mover a la papelera)
+  async eliminar(req: RequestWithUser, res: Response, next: NextFunction) {
+    try {
+      if (!req.user) {
+        throw new ApiError(401, 'No autorizado');
+      }
+
+      const { id } = req.params;
+
+      // Verificar que el mensaje existe y el usuario tiene acceso
+      const mensaje = await Mensaje.findOne({
+        _id: id,
+        $or: [
+          { remitente: req.user._id },
+          { destinatarios: req.user._id },
+          { destinatariosCc: req.user._id },
+        ],
+      });
+
+      if (!mensaje) {
+        throw new ApiError(404, 'Mensaje no encontrado');
+      }
+
+      // Actualizar directamente en la base de datos
+      await Mensaje.updateOne(
+        {
+          _id: id,
+          $or: [
+            { 'estadosUsuarios.usuarioId': new mongoose.Types.ObjectId(req.user._id) },
+            { 'estadosUsuarios.usuarioId': { $exists: false } },
+          ],
+        },
+        {
+          $set: {
+            'estadosUsuarios.$[elem].estado': EstadoMensaje.ELIMINADO,
+            'estadosUsuarios.$[elem].fechaAccion': new Date(),
+            fechaAccion: new Date(),
+          },
+        },
+        {
+          arrayFilters: [{ 'elem.usuarioId': new mongoose.Types.ObjectId(req.user._id) }],
+          upsert: true,
+        },
+      );
+
+      res.json({
+        success: true,
+        message: 'Mensaje movido a la papelera',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // Método para restaurar mensaje desde la papelera
+  async restaurar(req: RequestWithUser, res: Response, next: NextFunction) {
+    try {
+      if (!req.user) {
+        throw new ApiError(401, 'No autorizado');
+      }
+
+      const { id } = req.params;
+
+      // Verificar que el mensaje existe y el usuario tiene acceso
+      const mensaje = await Mensaje.findOne({
+        _id: id,
+        $or: [
+          { remitente: req.user._id },
+          { destinatarios: req.user._id },
+          { destinatariosCc: req.user._id },
+        ],
+      });
+
+      if (!mensaje) {
+        throw new ApiError(404, 'Mensaje no encontrado');
+      }
+
+      // Verificar si el mensaje está eliminado para este usuario
+      let estaEliminado = false;
+
+      if (mensaje.estadosUsuarios && mensaje.estadosUsuarios.length > 0) {
+        const userId = req.user._id; // Store ID since we know req.user exists
+        const estadoUsuario = mensaje.estadosUsuarios.find(
+          (eu: any) => eu.usuarioId.toString() === userId,
+        );
+
+        if (estadoUsuario && estadoUsuario.estado === EstadoMensaje.ELIMINADO) {
+          estaEliminado = true;
+        }
+      } else if (mensaje.estado === EstadoMensaje.ELIMINADO) {
+        estaEliminado = true;
+      }
+
+      if (!estaEliminado) {
+        throw new ApiError(400, 'El mensaje no está en la papelera');
+      }
+
+      // Actualizar el estado directamente
+      await Mensaje.updateOne(
+        {
+          _id: id,
+          'estadosUsuarios.usuarioId': new mongoose.Types.ObjectId(req.user._id),
+        },
+        {
+          $set: {
+            'estadosUsuarios.$[elem].estado': EstadoMensaje.ENVIADO,
+            'estadosUsuarios.$[elem].fechaAccion': new Date(),
+            fechaAccion: new Date(),
+          },
+        },
+        {
+          arrayFilters: [{ 'elem.usuarioId': new mongoose.Types.ObjectId(req.user._id) }],
+        },
+      );
+
+      res.json({
+        success: true,
+        message: 'Mensaje restaurado correctamente',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  // Método para eliminar permanentemente un mensaje
+  async eliminarPermanentemente(req: RequestWithUser, res: Response, next: NextFunction) {
+    try {
+      if (!req.user) {
+        throw new ApiError(401, 'No autorizado');
+      }
+
+      const { id } = req.params;
+
+      // Buscar el mensaje que incluya al usuario y que esté en estado ELIMINADO para él
+      const mensaje = await Mensaje.findOne({
+        _id: id,
+        estadosUsuarios: {
+          $elemMatch: {
+            usuarioId: req.user._id,
+            estado: 'ELIMINADO',
+          },
+        },
+      });
+
+      if (!mensaje) {
+        throw new ApiError(404, 'Mensaje no encontrado o no está en la papelera');
+      }
+
+      // Actualizar el estado para este usuario específico a ELIMINADO_PERMANENTE
+      await Mensaje.updateOne(
+        {
+          _id: id,
+          'estadosUsuarios.usuarioId': req.user._id,
+        },
+        {
+          $set: { 'estadosUsuarios.$.estado': 'ELIMINADO_PERMANENTE' },
+        },
+      );
+
+      res.json({
+        success: true,
+        message: 'Mensaje eliminado permanentemente para este usuario',
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async descargarAdjunto(req: RequestWithUser, res: Response, next: NextFunction) {
     try {
       if (!req.user) {
@@ -486,11 +2125,179 @@ export class MensajeController {
     }
   }
 
-  // Responder a un mensaje
+  // Método para actualizar estado de lectura (agregar dentro de la clase MensajeController)
+
+  async actualizarEstadoLectura(req: RequestWithUser, res: Response, next: NextFunction) {
+    try {
+      if (!req.user) {
+        throw new ApiError(401, 'No autorizado');
+      }
+
+      const { id } = req.params;
+      const { leido } = req.body;
+
+      // Validar parámetros
+      if (leido === undefined || leido === null) {
+        throw new ApiError(400, 'El parámetro "leido" es requerido');
+      }
+
+      // Verificar que el mensaje existe y el usuario tiene acceso
+      const mensaje = await Mensaje.findOne({
+        _id: id,
+        $or: [
+          { remitente: req.user._id },
+          { destinatarios: req.user._id },
+          { destinatariosCc: req.user._id },
+        ],
+      });
+
+      if (!mensaje) {
+        throw new ApiError(404, 'Mensaje no encontrado');
+      }
+
+      // Verificar si el usuario tiene derecho a cambiar el estado de lectura
+      const esRemitente = mensaje.remitente.toString() === req.user._id.toString();
+      const esDestinatario =
+        mensaje.destinatarios &&
+        Array.isArray(mensaje.destinatarios) &&
+        mensaje.destinatarios.some((dest: any) => {
+          const destId =
+            typeof dest === 'object' && dest._id ? dest._id.toString() : dest.toString();
+          return destId === req.user!._id.toString();
+        });
+      const esDestinatarioCc =
+        mensaje.destinatariosCc &&
+        Array.isArray(mensaje.destinatariosCc) &&
+        mensaje.destinatariosCc.some((dest: any) => {
+          const destId =
+            typeof dest === 'object' && dest._id ? dest._id.toString() : dest.toString();
+          return destId === req.user!._id.toString();
+        });
+
+      // Mejorar mensaje de error para depuración
+      if (!esDestinatario && !esDestinatarioCc && !esRemitente) {
+        console.log(
+          `[DEBUG] Usuario ${req.user._id} (${req.user.tipo}) no puede marcar mensaje ${id}`,
+        );
+        console.log(
+          `[DEBUG] Es remitente: ${esRemitente}, Es destinatario: ${esDestinatario}, Es destinatarioCc: ${esDestinatarioCc}`,
+        );
+        console.log(`[DEBUG] Mensaje.remitente: ${mensaje.remitente}`);
+        throw new ApiError(
+          403,
+          'No tiene permisos para cambiar el estado de lectura de este mensaje',
+        );
+      }
+
+      // Actualizar el estado de lectura
+      if (leido) {
+        // Solo los destinatarios pueden marcar como leído
+        if (!esDestinatario && !esDestinatarioCc) {
+          throw new ApiError(403, 'Solo los destinatarios pueden marcar como leído');
+        }
+
+        // Si marcar como leído - Añadir a lecturas si no existe
+        const yaLeido =
+          mensaje.lecturas &&
+          Array.isArray(mensaje.lecturas) &&
+          mensaje.lecturas.some(
+            (l: any) => l.usuarioId && l.usuarioId.toString() === req.user!._id.toString(),
+          );
+
+        if (!yaLeido) {
+          await Mensaje.updateOne(
+            { _id: id },
+            {
+              $push: {
+                lecturas: {
+                  usuarioId: req.user._id,
+                  fechaLectura: new Date(),
+                },
+              },
+            },
+          );
+        }
+
+        res.json({
+          success: true,
+          message: 'Mensaje marcado como leído',
+        });
+      } else {
+        // Solo los destinatarios pueden marcar como no leído
+        if (!esDestinatario && !esDestinatarioCc) {
+          throw new ApiError(403, 'Solo los destinatarios pueden marcar como no leído');
+        }
+
+        // Si marcar como no leído - Eliminar de lecturas
+        await Mensaje.updateOne(
+          { _id: id },
+          {
+            $pull: {
+              lecturas: {
+                usuarioId: req.user._id,
+              },
+            },
+          },
+        );
+
+        res.json({
+          success: true,
+          message: 'Mensaje marcado como no leído',
+        });
+      }
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async obtenerBorradorPorId(req: RequestWithUser, res: Response, next: NextFunction) {
+    try {
+      if (!req.user) {
+        throw new ApiError(401, 'No autorizado');
+      }
+
+      // Verificar que el usuario tiene permiso para usar borradores
+      if (!ROLES_CON_BORRADORES.includes(req.user.tipo)) {
+        throw new ApiError(403, 'No tiene permisos para usar borradores');
+      }
+
+      const { id } = req.params;
+
+      // Validar que el ID sea válido
+      if (!mongoose.isValidObjectId(id)) {
+        throw new ApiError(400, 'ID de borrador inválido');
+      }
+
+      // Buscar el borrador del usuario
+      const borrador = await Mensaje.findOne({
+        _id: id,
+        remitente: req.user._id,
+        tipo: TipoMensaje.BORRADOR,
+      }).populate('destinatarios', 'nombre apellidos email tipo');
+
+      if (!borrador) {
+        throw new ApiError(404, 'Borrador no encontrado');
+      }
+
+      res.json({
+        success: true,
+        data: borrador,
+      });
+    } catch (error) {
+      console.error('Error al obtener borrador por ID:', error);
+      next(error);
+    }
+  }
+
   async responder(req: RequestWithUser, res: Response, next: NextFunction) {
     try {
       if (!req.user) {
         throw new ApiError(401, 'No autorizado');
+      }
+
+      // Verificar si el usuario es estudiante
+      if (req.user.tipo === 'ESTUDIANTE') {
+        throw new ApiError(403, 'Los estudiantes no pueden enviar mensajes');
       }
 
       const { mensajeId } = req.params;
@@ -523,6 +2330,19 @@ export class MensajeController {
       // Crear adjuntos si hay archivos
       const adjuntos = [];
       if (req.files && req.files.length > 0) {
+        const totalSize = req.files.reduce((sum, file) => sum + file.size, 0);
+        const MAX_TOTAL_SIZE = 15 * 1024 * 1024; // 15MB
+
+        if (totalSize > MAX_TOTAL_SIZE) {
+          throw new ApiError(
+            400,
+            `El tamaño total de los archivos adjuntos no puede superar los 15MB (tamaño actual: ${(
+              totalSize /
+              (1024 * 1024)
+            ).toFixed(2)}MB)`,
+          );
+        }
+
         const bucket = gridfsManager.getBucket();
         if (!bucket) {
           throw new ApiError(500, 'Servicio de archivos no disponible');
@@ -562,7 +2382,7 @@ export class MensajeController {
       }
 
       // Parsear destinatariosCc
-      let destinatariosCcArray = [];
+      let destinatariosCcArray: string[] = [];
       if (destinatariosCc) {
         if (typeof destinatariosCc === 'string') {
           try {
@@ -575,75 +2395,35 @@ export class MensajeController {
         }
       }
 
-      // Crear mensaje de respuesta
-      const respuesta = await Mensaje.create({
-        remitente: req.user._id,
+      // Datos para el servicio
+      const datosRespuesta = {
         destinatarios,
         destinatariosCc: destinatariosCcArray,
         asunto: asunto || `Re: ${mensajeOriginal.asunto}`,
         contenido,
+        adjuntos,
         tipo: TipoMensaje.INDIVIDUAL,
         prioridad: PrioridadMensaje.NORMAL,
         estado: EstadoMensaje.ENVIADO,
-        adjuntos,
-        escuelaId: req.user.escuelaId,
         esRespuesta: true,
         mensajeOriginalId: mensajeId,
-        lecturas: [],
-      });
+      };
 
-      // Obtener nombre del remitente
-      const nombreRemitente = `${req.user.nombre || ''} ${req.user.apellidos || ''}`.trim();
+      // Usar el servicio para crear la respuesta
+      const respuesta = await mensajeService.crearMensaje(datosRespuesta, req.user);
 
-      // Enviar notificaciones por email
-      // Obtener información de todos los destinatarios
-      const usuarios = await Usuario.find({
-        _id: { $in: [...destinatarios, ...destinatariosCcArray] },
-      });
+      // Verificar si hay estudiantes en los destinatarios para enviar copias a acudientes
+      const estudiantesInfo = await Usuario.find({
+        _id: { $in: destinatarios },
+        tipo: 'ESTUDIANTE',
+      }).select('_id');
 
-      // Para cada destinatario, enviar notificación por email
-      for (const usuario of usuarios) {
-        if (usuario.email) {
-          await emailService.sendMensajeNotification(usuario.email, {
-            remitente: nombreRemitente,
-            asunto: respuesta.asunto,
-            fecha: new Date(),
-            tieneAdjuntos: adjuntos.length > 0,
-            url: `${config.frontendUrl}/mensajes/${respuesta._id}`,
-          });
-        }
+      const estudiantesIds = estudiantesInfo.map((est: any) => est._id.toString());
+
+      // Enviar mensajes a acudientes para cada estudiante
+      for (const estudianteId of estudiantesIds) {
+        await mensajeService.enviarCopiaAcudientes(estudianteId, datosRespuesta, req.user);
       }
-
-      // Crear notificaciones para los destinatarios
-      const respuestaId = (respuesta as any)._id.toString();
-      for (const destinatarioId of [...destinatarios, ...destinatariosCcArray]) {
-        await notificacionService.crearNotificacion({
-          usuarioId: destinatarioId,
-          titulo: `Respuesta: ${respuesta.asunto}`,
-          mensaje: `${nombreRemitente} ha respondido a un mensaje`,
-          tipo: TipoNotificacion.MENSAJE,
-          escuelaId: req.user.escuelaId,
-          entidadId: respuestaId,
-          entidadTipo: 'Mensaje',
-          metadata: {
-            remitente: nombreRemitente,
-            tieneAdjuntos: adjuntos.length > 0,
-            mensajeId: respuestaId,
-            mensajeOriginalId: mensajeId,
-            url: `${config.frontendUrl}/mensajes/${respuesta._id}`,
-          },
-          // No enviamos email aquí porque ya lo hacemos por separado
-          enviarEmail: false,
-        });
-      }
-
-      // Devolver mensaje creado
-      await respuesta.populate([
-        { path: 'remitente', select: 'nombre apellidos email tipo' },
-        { path: 'destinatarios', select: 'nombre apellidos email tipo' },
-        { path: 'destinatariosCc', select: 'nombre apellidos email tipo' },
-        { path: 'mensajeOriginalId' },
-      ]);
 
       res.status(201).json({
         success: true,

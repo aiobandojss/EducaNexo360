@@ -22,6 +22,11 @@ import {
   responseTimeMiddleware,
   rateLimiter,
 } from './middleware/performance.middleware';
+import calendarioRoutes from './routes/calendario.routes';
+import anuncioRoutes from './routes/anuncio.routes';
+import asistenciaRoutes from './routes/asistencia.routes';
+import systemRoutes from './routes/system.routes';
+import superadminRoutes from './routes/superadmin.routes';
 
 //import config from './config/config';
 
@@ -52,6 +57,11 @@ app.use('/api/calificaciones', calificacionRoutes);
 app.use('/api/boletin', boletinRoutes);
 //app.use('/api/mensajes', mensajeRoutes);
 app.use('/api/notificaciones', notificacionRoutes);
+app.use('/api/calendario', calendarioRoutes);
+app.use('/api/anuncios', anuncioRoutes);
+app.use('/api/asistencia', asistenciaRoutes);
+app.use('/api/system', systemRoutes);
+app.use('/api/superadmin', superadminRoutes);
 
 // Ruta base
 app.get('/', (_req: Request, res: Response) => {
@@ -82,15 +92,18 @@ app.use((err: Error | ApiError, _req: Request, res: Response, _next: NextFunctio
 
 const connectDB = async () => {
   try {
-    const conn = await mongoose.connect(
-      process.env.MONGODB_URI || 'mongodb://localhost:27017/educanexo360',
-    );
-    console.log(`MongoDB Connected: ${conn.connection.host}`);
+    // Se usa la variable de entorno MONGODB_URI si está definida,
+    // de lo contrario se usa una conexión local (solo para desarrollo)
+    // En producción, MONGODB_URI debe apuntar a MongoDB Atlas
+    const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/educanexo360';
 
-    // Inicializar GridFS después de conectar a MongoDB
-    await gridfsManager.initializeStorage(
-      process.env.MONGODB_URI || 'mongodb://localhost:27017/educanexo360',
-    );
+    // Conectar a MongoDB (Atlas o local)
+    const conn = await mongoose.connect(mongoURI);
+    console.log(`MongoDB Connected: ${conn.connection.host}`);
+    console.log(`Database Name: ${conn.connection.name}`);
+
+    // Inicializar GridFS con la misma conexión
+    await gridfsManager.initializeStorage(mongoURI);
     console.log('GridFS Storage initialized successfully');
   } catch (error) {
     console.error('Error connecting to MongoDB:', error);

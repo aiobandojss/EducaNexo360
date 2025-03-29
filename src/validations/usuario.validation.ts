@@ -1,40 +1,52 @@
 import { body } from 'express-validator';
 
+// Validación para actualizar usuario
 export const actualizarUsuarioValidation = [
-  body('nombre').optional().trim().notEmpty().withMessage('El nombre no puede estar vacío'),
-  body('apellidos')
+  body('nombre').optional().isString().withMessage('El nombre debe ser un texto'),
+  body('apellidos').optional().isString().withMessage('Los apellidos deben ser un texto'),
+  body('tipo')
     .optional()
-    .trim()
-    .notEmpty()
-    .withMessage('Los apellidos no pueden estar vacíos'),
-  body('perfil.telefono')
-    .optional()
-    .trim()
-    .notEmpty()
-    .withMessage('El teléfono no puede estar vacío'),
-  body('perfil.direccion')
-    .optional()
-    .trim()
-    .notEmpty()
-    .withMessage('La dirección no puede estar vacía'),
+    .isIn([
+      'SUPER_ADMIN',
+      'ADMIN',
+      'DOCENTE',
+      'ACUDIENTE',
+      'ESTUDIANTE',
+      'COORDINADOR',
+      'RECTOR',
+      'ADMINISTRATIVO',
+    ])
+    .withMessage('Tipo de usuario no válido'),
   body('estado').optional().isIn(['ACTIVO', 'INACTIVO']).withMessage('Estado no válido'),
+  body('perfil.telefono').optional().isString().withMessage('El teléfono debe ser un texto'),
+  body('perfil.direccion').optional().isString().withMessage('La dirección debe ser un texto'),
+  body('info_academica.grado').optional().isString().withMessage('El grado debe ser un texto'),
+  body('info_academica.grupo').optional().isString().withMessage('El grupo debe ser un texto'),
+  body('info_academica.codigo_estudiante')
+    .optional()
+    .isString()
+    .withMessage('El código de estudiante debe ser un texto'),
+  body('info_academica.estudiantes_asociados')
+    .optional()
+    .isArray()
+    .withMessage('Los estudiantes asociados deben ser un array'),
 ];
 
+// Validación para cambiar contraseña
 export const cambiarPasswordValidation = [
-  body('passwordActual')
-    .notEmpty()
-    .withMessage('La contraseña actual es requerida')
-    .isLength({ min: 6 })
-    .withMessage('La contraseña debe tener al menos 6 caracteres'),
+  body('passwordActual').notEmpty().withMessage('La contraseña actual es requerida'),
   body('nuevaPassword')
     .notEmpty()
     .withMessage('La nueva contraseña es requerida')
     .isLength({ min: 6 })
-    .withMessage('La contraseña debe tener al menos 6 caracteres')
-    .custom((value, { req }) => {
-      if (value === req.body.passwordActual) {
-        throw new Error('La nueva contraseña debe ser diferente a la actual');
-      }
-      return true;
-    }),
+    .withMessage('La nueva contraseña debe tener al menos 6 caracteres'),
+];
+
+// Validación para asociar estudiante
+export const asociarEstudianteValidation = [
+  body('estudianteId')
+    .notEmpty()
+    .withMessage('El ID del estudiante es requerido')
+    .isMongoId()
+    .withMessage('ID de estudiante no válido'),
 ];

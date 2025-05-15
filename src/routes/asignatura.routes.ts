@@ -13,6 +13,14 @@ const router = express.Router();
 // Todas las rutas requieren autenticación
 router.use(authenticate);
 
+// Nueva ruta para obtener asignaturas por curso
+// Importante: Debe ir ANTES de la ruta /:id para evitar conflictos
+router.get(
+  '/curso/:cursoId',
+  authorize('ADMIN', 'DOCENTE', 'RECTOR', 'COORDINADOR', 'ADMINISTRATIVO'),
+  asignaturaController.obtenerPorCurso,
+);
+
 // Rutas para administradores
 router.post(
   '/',

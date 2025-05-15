@@ -19,7 +19,7 @@ router.use(authenticate);
 // Rutas para gestionar eventos
 router.post(
   '/',
-  authorize('ADMIN', 'DOCENTE', 'ESTUDIANTE', 'PADRE'),
+  authorize('ADMIN', 'DOCENTE', 'ESTUDIANTE', 'PADRE', 'ACUDIENTE'), // 👈 Añadido ACUDIENTE
   gridfsManager.getUpload()?.single('archivo') || [],
   validate(crearEventoValidation),
   calendarioController.crearEvento as unknown as express.RequestHandler,
@@ -27,13 +27,13 @@ router.post(
 
 router.get(
   '/',
-  authorize('ADMIN', 'DOCENTE', 'ESTUDIANTE', 'PADRE'),
+  authorize('ADMIN', 'DOCENTE', 'ESTUDIANTE', 'PADRE', 'ACUDIENTE'), // 👈 Añadido ACUDIENTE
   calendarioController.obtenerEventos as express.RequestHandler,
 );
 
 router.get(
   '/:id',
-  authorize('ADMIN', 'DOCENTE', 'ESTUDIANTE', 'PADRE'),
+  authorize('ADMIN', 'DOCENTE', 'ESTUDIANTE', 'PADRE', 'ACUDIENTE'), // 👈 Añadido ACUDIENTE
   calendarioController.obtenerEventoPorId as express.RequestHandler,
 );
 
@@ -54,14 +54,14 @@ router.delete(
 // Rutas específicas
 router.post(
   '/:id/confirmar',
-  authorize('ADMIN', 'DOCENTE', 'ESTUDIANTE', 'PADRE'),
+  authorize('ADMIN', 'DOCENTE', 'ESTUDIANTE', 'PADRE', 'ACUDIENTE'), // 👈 Añadido ACUDIENTE
   validate(confirmarAsistenciaValidation),
   calendarioController.confirmarAsistencia as express.RequestHandler,
 );
 
 router.get(
   '/:id/adjunto',
-  authorize('ADMIN', 'DOCENTE', 'ESTUDIANTE', 'PADRE'),
+  authorize('ADMIN', 'DOCENTE', 'ESTUDIANTE', 'PADRE', 'ACUDIENTE'), // 👈 Añadido ACUDIENTE
   calendarioController.descargarAdjunto as express.RequestHandler,
 );
 

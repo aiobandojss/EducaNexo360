@@ -28,100 +28,203 @@ import asistenciaRoutes from './routes/asistencia.routes';
 import systemRoutes from './routes/system.routes';
 import superadminRoutes from './routes/superadmin.routes';
 
-//import config from './config/config';
+import invitacionRoutes from './routes/invitacion.routes';
+import registroRoutes from './routes/registro.routes';
+import publicRoutes from './routes/public.routes';
 
 // Configuración de variables de entorno
 dotenv.config();
 
+// Obtiene la ruta base configurada en app.js (archivo raíz)
+const basePath = process.env.BASE_PATH || '';
+console.log(`Inicializando aplicación con BASE_PATH: "${basePath}"`);
+
 const app: Express = express();
 
-// Middlewares
-app.use(cors());
+// ===== CONFIGURACIÓN CORS MEJORADA =====
+const corsOptions = {
+  origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+};
+app.use(cors(corsOptions));
+
+// ===== MIDDLEWARES PRINCIPALES =====
 app.use(helmet());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 setupCompression(app);
 app.use(responseTimeMiddleware);
 
-// Rutas
-app.use('/api/auth', rateLimiter(60000, 20), authRoutes);
-app.use('/api/mensajes', rateLimiter(60000, 100), mensajeRoutes);
-//app.use('/api/auth', authRoutes);
-app.use('/api/escuelas', escuelaRoutes);
-app.use('/api/usuarios', usuarioRoutes);
-app.use('/api/cursos', cursoRoutes);
-app.use('/api/asignaturas', asignaturaRoutes);
-app.use('/api/logros', logroRoutes);
-app.use('/api/academic', academicRoutes);
-app.use('/api/calificaciones', calificacionRoutes);
-app.use('/api/boletin', boletinRoutes);
-//app.use('/api/mensajes', mensajeRoutes);
-app.use('/api/notificaciones', notificacionRoutes);
-app.use('/api/calendario', calendarioRoutes);
-app.use('/api/anuncios', anuncioRoutes);
-app.use('/api/asistencia', asistenciaRoutes);
-app.use('/api/system', systemRoutes);
-app.use('/api/superadmin', superadminRoutes);
+// ======= SOLUCIÓN DEFINITIVA DE RUTEO =======
+// Crear router para API
+const apiRouter = express.Router();
 
-// Ruta base
-app.get('/', (_req: Request, res: Response) => {
-  res.send('EducaNexo360 API');
+// ===== ENDPOINT DE DIAGNÓSTICO/SALUD =====
+apiRouter.get('/health', (req: Request, res: Response) => {
+  res.json({
+    status: 'UP',
+    version: process.env.npm_package_version || '1.0.0',
+    environment: process.env.NODE_ENV || 'development',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    memoryUsage: process.memoryUsage(),
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+  });
 });
 
-// Manejo de rutas no encontradas
-app.use((_req: Request, _res: Response, next: NextFunction) => {
+// ===== RUTAS DE LA API en el router =====
+apiRouter.use('/auth', rateLimiter(60000, 20), authRoutes);
+apiRouter.use('/mensajes', rateLimiter(60000, 100), mensajeRoutes);
+apiRouter.use('/escuelas', escuelaRoutes);
+apiRouter.use('/usuarios', usuarioRoutes);
+apiRouter.use('/cursos', cursoRoutes);
+apiRouter.use('/asignaturas', asignaturaRoutes);
+apiRouter.use('/logros', logroRoutes);
+apiRouter.use('/academic', academicRoutes);
+apiRouter.use('/calificaciones', calificacionRoutes);
+apiRouter.use('/boletin', boletinRoutes);
+apiRouter.use('/notificaciones', notificacionRoutes);
+apiRouter.use('/calendario', calendarioRoutes);
+apiRouter.use('/anuncios', anuncioRoutes);
+apiRouter.use('/asistencia', asistenciaRoutes);
+apiRouter.use('/system', systemRoutes);
+apiRouter.use('/superadmin', superadminRoutes);
+apiRouter.use('/invitaciones', invitacionRoutes);
+apiRouter.use('/registro', registroRoutes);
+apiRouter.use('/public', publicRoutes);
+
+// ===== MONTAR EL ROUTER API =====
+// Si hay basePath, lo usamos; de lo contrario, montamos en /api
+if (basePath) {
+  app.use(`${basePath}/api`, apiRouter);
+} else {
+  app.use('/api', apiRouter);
+}
+
+// ===== RUTA BASE =====
+app.get(basePath || '/', (req: Request, res: Response) => {
+  res.json({
+    name: 'EducaNexo360 API',
+    version: process.env.npm_package_version || '1.0.0',
+    environment: process.env.NODE_ENV || 'development',
+    time: new Date().toISOString(),
+  });
+});
+
+// ===== MANEJO DE RUTAS NO ENCONTRADAS =====
+app.use((req: Request, res: Response, next: NextFunction) => {
   next(new ApiError(404, 'Ruta no encontrada'));
 });
 
-// Manejo de errores global
-app.use((err: Error | ApiError, _req: Request, res: Response, _next: NextFunction) => {
+// ===== MANEJO DE ERRORES GLOBAL =====
+app.use((err: Error | ApiError, req: Request, res: Response, next: NextFunction) => {
+  console.error('Error en la aplicación:', err);
+
   if (err instanceof ApiError) {
     res.status(err.statusCode).json({
       success: false,
       message: err.message,
+      error: err.name,
       stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
     });
   } else {
     res.status(500).json({
       success: false,
       message: 'Error interno del servidor',
+      error: err.name || 'UnknownError',
       stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
     });
   }
 });
 
+// ===== CONEXIÓN A BASE DE DATOS =====
 const connectDB = async () => {
   try {
-    // Se usa la variable de entorno MONGODB_URI si está definida,
-    // de lo contrario se usa una conexión local (solo para desarrollo)
-    // En producción, MONGODB_URI debe apuntar a MongoDB Atlas
     const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/educanexo360';
+    console.log(
+      `Conectando a MongoDB en: ${mongoURI.replace(/\/\/([^:]+):([^@]+)@/, '//***:***@')}`,
+    );
 
-    // Conectar a MongoDB (Atlas o local)
-    const conn = await mongoose.connect(mongoURI);
+    // Opciones de conexión mejoradas
+    const mongooseOptions = {
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+    };
+
+    // Conectar a MongoDB
+    const conn = await mongoose.connect(mongoURI, mongooseOptions);
     console.log(`MongoDB Connected: ${conn.connection.host}`);
     console.log(`Database Name: ${conn.connection.name}`);
 
-    // Inicializar GridFS con la misma conexión
+    // Inicializar GridFS
     await gridfsManager.initializeStorage(mongoURI);
     console.log('GridFS Storage initialized successfully');
   } catch (error) {
     console.error('Error connecting to MongoDB:', error);
-    process.exit(1);
+    // En lugar de cerrar inmediatamente, vamos a reintentar
+    console.log('Retrying connection in 5 seconds...');
+    setTimeout(() => {
+      connectDB().catch((err) => {
+        console.error('Failed to reconnect to MongoDB:', err);
+        process.exit(1);
+      });
+    }, 5000);
   }
 };
 
+// ===== INICIAR SERVIDOR =====
 const PORT = process.env.PORT || 3000;
 
 const startServer = async () => {
   await connectDB();
-  app.listen(PORT, () => {
+
+  const server = app.listen(PORT, () => {
     console.log(
-      `Server is running on port ${PORT} in ${process.env.NODE_ENV || 'development'} mode`,
+      `✅ Servidor iniciado en puerto ${PORT} en modo ${process.env.NODE_ENV || 'development'}`,
     );
+    console.log(`📝 API documentación: http://localhost:${PORT}${basePath}/api/docs`);
+    console.log(`🩺 Health check: http://localhost:${PORT}${basePath}/api/health`);
+  });
+
+  // Manejo graceful de cierre
+  const gracefulShutdown = async (signal: string) => {
+    console.log(`Recibida señal ${signal}. Cerrando servidor...`);
+    server.close(async () => {
+      console.log('Servidor HTTP cerrado.');
+
+      try {
+        await mongoose.connection.close();
+        console.log('Conexión a MongoDB cerrada correctamente.');
+        process.exit(0);
+      } catch (err) {
+        console.error('Error al cerrar conexión a MongoDB:', err);
+        process.exit(1);
+      }
+    });
+
+    // Si no se cierra en 10 segundos, forzar cierre
+    setTimeout(() => {
+      console.error('No se pudo cerrar limpiamente, forzando salida.');
+      process.exit(1);
+    }, 10000);
+  };
+
+  // Capturar señales para cierre graceful
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+  // Manejar excepciones no capturadas
+  process.on('uncaughtException', (error) => {
+    console.error('Excepción no capturada:', error);
+    gracefulShutdown('uncaughtException');
   });
 };
 
-startServer().catch((err) => console.error('Error starting server:', err));
+startServer().catch((err) => {
+  console.error('Error fatal al iniciar servidor:', err);
+  process.exit(1);
+});
 
 export default app;

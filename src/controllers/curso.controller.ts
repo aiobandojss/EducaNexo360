@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import mongoose from 'mongoose';
 import Curso from '../models/curso.model';
 import ApiError from '../utils/ApiError';
 
@@ -38,6 +39,8 @@ class CursoController {
     }
   }
 
+  // Modificación para el controlador de cursos - Método obtenerTodos
+
   async obtenerTodos(req: RequestWithUser, res: Response, next: NextFunction) {
     try {
       if (!req.user) {
@@ -55,9 +58,51 @@ class CursoController {
         query.estado = estado;
       }
 
-      const cursos = await Curso.find(query)
-        .populate(['director_grupo', 'estudiantes'])
-        .sort({ nombre: 1 });
+      // Filtrar cursos según el rol del usuario
+      let cursos;
+
+      // Si es ADMIN o RECTOR o COORDINADOR, puede ver todos los cursos
+      if (['ADMIN', 'RECTOR', 'COORDINADOR'].includes(req.user.tipo)) {
+        cursos = await Curso.find(query)
+          .populate(['director_grupo', 'estudiantes'])
+          .sort({ nombre: 1 });
+      }
+      // Si es DOCENTE, solo ve los cursos donde es director o imparte clases
+      else if (req.user.tipo === 'DOCENTE') {
+        // 1. Buscar cursos donde es director de grupo
+        const cursosDirigidos = await Curso.find({
+          ...query,
+          director_grupo: req.user._id,
+        });
+
+        // 2. Buscar asignaturas donde el docente imparte clases
+        const asignaturas = await mongoose.model('Asignatura').find({
+          escuelaId: req.user.escuelaId,
+          docenteId: req.user._id,
+          estado: 'ACTIVO',
+        });
+
+        // 3. Extraer los cursos de esas asignaturas
+        const cursosAsignaturas = await Curso.find({
+          ...query,
+          _id: { $in: asignaturas.map((a) => a.cursoId) },
+        });
+
+        // 4. Combinar y eliminar duplicados
+        const todosLosCursos = [...cursosDirigidos, ...cursosAsignaturas];
+        const cursosIds = new Set(todosLosCursos.map((c: { _id: any }) => c._id.toString()));
+
+        // 5. Buscar los cursos completos con sus relaciones
+        cursos = await Curso.find({
+          _id: { $in: Array.from(cursosIds) },
+        })
+          .populate(['director_grupo', 'estudiantes'])
+          .sort({ nombre: 1 });
+      }
+      // Para otros roles (estudiantes, padres), no deberían acceder a esta función
+      else {
+        throw new ApiError(403, 'No tiene permisos para ver cursos');
+      }
 
       res.json({
         success: true,
@@ -67,7 +112,6 @@ class CursoController {
       next(error);
     }
   }
-
   async obtenerPorId(req: RequestWithUser, res: Response, next: NextFunction) {
     try {
       if (!req.user) {
@@ -202,6 +246,30 @@ class CursoController {
       res.json({
         success: true,
         data: curso,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async obtenerEstudiantes(req: RequestWithUser, res: Response, next: NextFunction) {
+    try {
+      if (!req.user) {
+        throw new ApiError(401, 'No autorizado');
+      }
+
+      const curso = await Curso.findOne({
+        _id: req.params.id,
+        escuelaId: req.user.escuelaId,
+      }).populate('estudiantes', 'nombre apellidos email tipo');
+
+      if (!curso) {
+        throw new ApiError(404, 'Curso no encontrado');
+      }
+
+      res.json({
+        success: true,
+        data: curso.estudiantes,
       });
     } catch (error) {
       next(error);

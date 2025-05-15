@@ -1,10 +1,12 @@
 import express from 'express';
-import authController from '../controllers/auth.controller';
+import { authController } from '../controllers/auth.controller';
 import { validate } from '../middleware/validate.middleware';
 import {
   loginValidation,
   registerValidation,
   refreshTokenValidation,
+  forgotPasswordValidation,
+  resetPasswordValidation,
 } from '../validations/auth.validation';
 
 const router = express.Router();
@@ -36,5 +38,19 @@ router.post('/refresh-token', validate(refreshTokenValidation), authController.r
  * @access Private
  */
 router.post('/logout', authController.logout);
+
+/**
+ * @route POST /api/auth/forgot-password
+ * @desc Solicitar recuperación de contraseña
+ * @access Public
+ */
+router.post('/forgot-password', validate(forgotPasswordValidation), authController.forgotPassword);
+
+/**
+ * @route POST /api/auth/reset-password
+ * @desc Restablecer contraseña con token
+ * @access Public
+ */
+router.post('/reset-password', validate(resetPasswordValidation), authController.resetPassword);
 
 export default router;

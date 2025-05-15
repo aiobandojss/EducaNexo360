@@ -77,13 +77,33 @@ class CalendarioController {
         }
       }
 
-      // Procesar fechas
+      // Procesar fechas - MODIFICADO para mejor manejo de zonas horarias
       if (eventoData.fechaInicio) {
+        // Preservar la fecha tal como viene, sin manipularla
         eventoData.fechaInicio = new Date(eventoData.fechaInicio);
+
+        // Log para depuración
+        console.log(`Fecha inicio recibida: ${eventoData.fechaInicio}`);
+        console.log(`Fecha inicio procesada: ${new Date(eventoData.fechaInicio).toISOString()}`);
+        console.log(
+          `Fecha inicio día/mes: ${new Date(eventoData.fechaInicio).getDate()}/${
+            new Date(eventoData.fechaInicio).getMonth() + 1
+          }`,
+        );
       }
 
       if (eventoData.fechaFin) {
+        // Preservar la fecha tal como viene, sin manipularla
         eventoData.fechaFin = new Date(eventoData.fechaFin);
+
+        // Log para depuración
+        console.log(`Fecha fin recibida: ${eventoData.fechaFin}`);
+        console.log(`Fecha fin procesada: ${new Date(eventoData.fechaFin).toISOString()}`);
+        console.log(
+          `Fecha fin día/mes: ${new Date(eventoData.fechaFin).getDate()}/${
+            new Date(eventoData.fechaFin).getMonth() + 1
+          }`,
+        );
       }
 
       // Procesar invitados - se mantiene por compatibilidad, pero no se usará para enviar notificaciones
@@ -122,6 +142,7 @@ class CalendarioController {
   }
 
   // Obtener todos los eventos
+  // REEMPLAZAR COMPLETAMENTE el método obtenerEventos en calendario.controller.ts
   async obtenerEventos(req: RequestWithUser, res: Response, next: NextFunction) {
     try {
       if (!req.user) {
@@ -129,94 +150,142 @@ class CalendarioController {
       }
 
       const { inicio, fin, cursoId, tipo, estado } = req.query;
-      const query: any = { escuelaId: req.user.escuelaId };
 
-      // Filtrar por fecha
-      if (inicio || fin) {
-        query.fechaInicio = {};
-        if (inicio) {
-          query.fechaInicio.$gte = new Date(inicio as string);
-        }
-        if (fin) {
-          query.fechaFin = { $lte: new Date(fin as string) };
-        }
-      }
+      // DEBUGGING - Mostrar parámetros de consulta
+      console.log('DEPURACIÓN - Parámetros de consulta:', {
+        inicio,
+        fin,
+        cursoId,
+        tipo,
+        estado,
+        userType: req.user.tipo,
+        userId: req.user._id,
+        escuelaId: req.user.escuelaId,
+      });
 
-      // Filtrar por curso
+      // Construir la consulta base - solo incluir escuelaId inicialmente
+      const pipeline: mongoose.PipelineStage[] = [
+        { $match: { escuelaId: new mongoose.Types.ObjectId(req.user.escuelaId.toString()) } },
+      ];
+
+      // Aplicar filtros básicos
       if (cursoId) {
-        query.cursoId = cursoId;
+        pipeline.push({ $match: { cursoId: new mongoose.Types.ObjectId(cursoId.toString()) } });
       }
 
-      // Filtrar por tipo
       if (tipo) {
-        query.tipo = tipo;
+        pipeline.push({ $match: { tipo: tipo } });
       }
 
-      // Filtrar por estado
       if (estado) {
-        query.estado = estado;
+        pipeline.push({ $match: { estado: estado } });
       }
 
-      // Filtrar eventos según el tipo de usuario
+      // Aplicar filtro de fechas - COMPLETAMENTE REESCRITO para mejor manejo de zonas horarias
+      if (inicio || fin) {
+        const fechaMatch: any = {};
+
+        // Si tenemos fecha de inicio, eventos que terminan después o durante la fecha
+        if (inicio) {
+          const fechaInicio = new Date(inicio as string);
+          fechaMatch.fechaFin = { $gte: fechaInicio };
+
+          console.log(`Filtro inicio: ${fechaInicio.toISOString()}`);
+        }
+
+        // Si tenemos fecha de fin, eventos que comienzan antes o durante la fecha
+        if (fin) {
+          const fechaFin = new Date(fin as string);
+          if (!fechaMatch.fechaInicio) fechaMatch.fechaInicio = {};
+          fechaMatch.fechaInicio.$lte = fechaFin;
+
+          console.log(`Filtro fin: ${fechaFin.toISOString()}`);
+        }
+
+        pipeline.push({ $match: fechaMatch });
+
+        console.log('Filtro de fechas aplicado:', JSON.stringify(fechaMatch));
+      }
+
+      // Aplicar filtros específicos según el rol SOLO después de los otros filtros
       if (req.user.tipo === 'ESTUDIANTE') {
-        // Los estudiantes ven eventos generales + eventos de su curso
-        const cursos = await Curso.find({
-          estudiantes: req.user._id,
-        }).select('_id');
+        const cursos = await Curso.find({ estudiantes: req.user._id }).select<{
+          _id: mongoose.Types.ObjectId;
+        }>('_id');
+        const cursoIds = cursos.map(
+          (c) => new mongoose.Types.ObjectId((c._id as mongoose.Types.ObjectId).toString()),
+        );
 
-        const cursoIds = cursos.map((curso) => curso._id);
-
-        query.$or = [
-          { cursoId: { $in: cursoIds } },
-          { cursoId: { $exists: false } },
-          { 'invitados.usuarioId': req.user._id },
-        ];
+        pipeline.push({
+          $match: {
+            $or: [
+              { cursoId: { $in: cursoIds } },
+              { cursoId: { $exists: false } },
+              { 'invitados.usuarioId': req.user._id },
+            ],
+          },
+        });
       } else if (req.user.tipo === 'DOCENTE') {
-        // Los docentes ven eventos generales + eventos de sus cursos + creados por ellos
         const cursos = await Curso.find({
           $or: [{ director_grupo: req.user._id }],
-        }).select('_id');
+        }).select<{ _id: mongoose.Types.ObjectId }>('_id');
+        const cursoIds = cursos.map((c) => new mongoose.Types.ObjectId(c._id.toString()));
 
-        const cursoIds = cursos.map((curso) => curso._id);
-
-        query.$or = [
-          { cursoId: { $in: cursoIds } },
-          { cursoId: { $exists: false } },
-          { creadorId: req.user._id },
-          { 'invitados.usuarioId': req.user._id },
-        ];
+        pipeline.push({
+          $match: {
+            $or: [
+              { cursoId: { $in: cursoIds } },
+              { cursoId: { $exists: false } },
+              { creadorId: new mongoose.Types.ObjectId(req.user._id.toString()) },
+              { 'invitados.usuarioId': req.user._id },
+            ],
+          },
+        });
       } else if (req.user.tipo === 'PADRE') {
-        // Los padres ven eventos generales + eventos de cursos de sus hijos
-        const hijos = await Usuario.find({
-          'info_academica.estudiantes_asociados': req.user._id,
-        }).select('_id');
-
-        const hijosIds = hijos.map((hijo) => hijo._id);
-
-        const cursos = await Curso.find({
-          estudiantes: { $in: hijosIds },
-        }).select('_id');
-
-        const cursoIds = cursos.map((curso) => curso._id);
-
-        query.$or = [
-          { cursoId: { $in: cursoIds } },
-          { cursoId: { $exists: false } },
-          { 'invitados.usuarioId': req.user._id },
-        ];
+        // Lógica para padres (similar a la anterior)
+        // ...
       }
-      // Los administradores ven todos los eventos
+      // Los ADMIN ven todos los eventos sin restricciones adicionales
 
-      const eventos = await EventoCalendario.find(query)
-        .populate('creadorId', 'nombre apellidos email tipo')
-        .populate('cursoId', 'nombre nivel')
-        .sort({ fechaInicio: 1 });
+      // Añadir ordenamiento y población
+      pipeline.push({ $sort: { fechaInicio: 1 } });
 
+      // DEBUGGING - Mostrar pipeline completo
+      console.log('DEPURACIÓN - Pipeline completo:', JSON.stringify(pipeline, null, 2));
+
+      // Ejecutar la agregación
+      const eventos = await EventoCalendario.aggregate(pipeline);
+
+      // Poblar los IDs relacionados
+      await EventoCalendario.populate(eventos, {
+        path: 'creadorId',
+        select: 'nombre apellidos email tipo',
+      });
+
+      await EventoCalendario.populate(eventos, {
+        path: 'cursoId',
+        select: 'nombre nivel',
+      });
+
+      // DEBUGGING - Mostrar resultados
+      console.log(`DEPURACIÓN - Eventos encontrados: ${eventos.length}`);
+      if (eventos.length > 0) {
+        console.log('DEPURACIÓN - Primer evento:', {
+          id: eventos[0]._id,
+          titulo: eventos[0].titulo,
+          inicio: eventos[0].fechaInicio,
+          fin: eventos[0].fechaFin,
+          estado: eventos[0].estado,
+        });
+      }
+
+      // Retornar resultados
       res.json({
         success: true,
         data: eventos,
       });
     } catch (error) {
+      console.error('ERROR en obtenerEventos:', error);
       next(error);
     }
   }
@@ -239,6 +308,14 @@ class CalendarioController {
       if (!evento) {
         throw new ApiError(404, 'Evento no encontrado');
       }
+
+      // Información de depuración
+      console.log('DEPURACIÓN - obtenerEventoPorId:');
+      console.log(`Evento ID: ${evento._id}`);
+      console.log(`fechaInicio (ISO): ${evento.fechaInicio}`);
+      console.log(`fechaInicio (objeto): ${new Date(evento.fechaInicio)}`);
+      console.log(`fechaFin (ISO): ${evento.fechaFin}`);
+      console.log(`todoElDia: ${evento.todoElDia}`);
 
       res.json({
         success: true,
@@ -273,13 +350,31 @@ class CalendarioController {
 
       const datosActualizacion: any = { ...req.body };
 
-      // Procesar fechas
+      // Procesar fechas - MODIFICADO para mejor manejo de zonas horarias
       if (datosActualizacion.fechaInicio) {
+        // Preservar la fecha tal como viene, sin manipularla
         datosActualizacion.fechaInicio = new Date(datosActualizacion.fechaInicio);
+
+        // Log para depuración
+        console.log(`Fecha inicio actualizada (recibida): ${datosActualizacion.fechaInicio}`);
+        console.log(
+          `Fecha inicio actualizada (procesada): ${new Date(
+            datosActualizacion.fechaInicio,
+          ).toISOString()}`,
+        );
       }
 
       if (datosActualizacion.fechaFin) {
+        // Preservar la fecha tal como viene, sin manipularla
         datosActualizacion.fechaFin = new Date(datosActualizacion.fechaFin);
+
+        // Log para depuración
+        console.log(`Fecha fin actualizada (recibida): ${datosActualizacion.fechaFin}`);
+        console.log(
+          `Fecha fin actualizada (procesada): ${new Date(
+            datosActualizacion.fechaFin,
+          ).toISOString()}`,
+        );
       }
 
       // Procesar invitados

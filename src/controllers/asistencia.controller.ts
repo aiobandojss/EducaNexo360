@@ -29,6 +29,8 @@ interface RequestWithUser extends Request {
  * Crear un nuevo registro de asistencia
  * @route POST /api/asistencia
  */
+// Modificación para el controlador de asistencia - Método crearAsistencia
+
 export const crearAsistencia = async (req: RequestWithUser, res: Response, next: NextFunction) => {
   try {
     if (!req.user) {
@@ -60,6 +62,31 @@ export const crearAsistencia = async (req: RequestWithUser, res: Response, next:
           'Ya existe un registro de asistencia para esta fecha, curso y asignatura',
         ),
       );
+    }
+
+    // VALIDACIÓN ADICIONAL: Verificar que el docente puede registrar asistencia para este curso
+    if (req.user.tipo === 'DOCENTE') {
+      // 1. Verificar si es director de grupo del curso
+      const curso = await Curso.findOne({
+        _id: cursoId,
+        director_grupo: req.user._id,
+      });
+
+      // 2. Si no es director, verificar si imparte alguna asignatura en el curso
+      if (!curso) {
+        const tieneAsignatura = await mongoose.model('Asignatura').findOne({
+          cursoId: cursoId,
+          docenteId: req.user._id,
+          estado: 'ACTIVO',
+        });
+
+        // 3. Si no tiene relación con el curso, denegar acceso
+        if (!tieneAsignatura) {
+          return next(
+            new ApiError(403, 'No tiene autorización para registrar asistencia en este curso'),
+          );
+        }
+      }
     }
 
     // Obtener los estudiantes del curso si no se proporcionaron
@@ -148,7 +175,7 @@ export const obtenerAsistencias = async (
       .sort({ fecha: -1 })
       .skip(skip)
       .limit(Number(limit))
-      .populate('cursoId', 'nombre nivel grado seccion')
+      .populate('cursoId', 'nombre nivel grado grupo')
       .populate('asignaturaId', 'nombre codigo')
       .populate('docenteId', 'nombre apellidos')
       .populate('estudiantes.estudianteId', 'nombre apellidos');
@@ -187,10 +214,14 @@ export const obtenerAsistenciaPorId = async (
     const { id } = req.params;
 
     const asistencia = await Asistencia.findById(id)
-      .populate('cursoId', 'nombre nivel grado seccion')
+      .populate('cursoId', 'nombre nivel grado grupo')
       .populate('asignaturaId', 'nombre codigo')
       .populate('docenteId', 'nombre apellidos')
-      .populate('estudiantes.estudianteId', 'nombre apellidos');
+      .populate({
+        path: 'estudiantes.estudianteId',
+        select: 'nombre apellidos email',
+        model: 'Usuario',
+      });
 
     if (!asistencia) {
       return next(new ApiError(404, 'Registro de asistencia no encontrado'));
@@ -201,9 +232,49 @@ export const obtenerAsistenciaPorId = async (
       return next(new ApiError(403, 'No tiene acceso a este registro de asistencia'));
     }
 
+    // Formatear los datos de estudiantes para enviar información completa
+    const estudiantesFormateados = asistencia.estudiantes.map((est) => {
+      // Determinar si estudianteId es un objeto o solo el ID
+      const estudianteObj =
+        typeof est.estudianteId === 'object' && est.estudianteId !== null
+          ? est.estudianteId
+          : { _id: est.estudianteId, nombre: '', apellidos: '' };
+
+      // Verificar que estado sea un valor válido, si no, asignar PRESENTE
+      const estadoValido = ['PRESENTE', 'AUSENTE', 'TARDANZA', 'JUSTIFICADO', 'PERMISO'].includes(
+        est.estado,
+      )
+        ? est.estado
+        : 'PRESENTE';
+
+      return {
+        estudianteId: estudianteObj._id || est.estudianteId,
+        nombre: 'nombre' in estudianteObj ? estudianteObj.nombre : '',
+        apellidos: 'apellidos' in estudianteObj ? estudianteObj.apellidos : '',
+        estado: estadoValido,
+        observaciones: est.observaciones || '',
+        justificacion: est.justificacion || '',
+      };
+    });
+
+    // Crear objeto de respuesta con datos formateados
+    const respuesta = {
+      ...asistencia.toObject(),
+      estudiantes: estudiantesFormateados,
+      cursoNombre: (asistencia.cursoId as any)?.nombre || '',
+      asignaturaNombre: (asistencia.asignaturaId as any)?.nombre || '',
+      grado: (asistencia.cursoId as any)?.grado || '',
+      grupo: (asistencia.cursoId as any)?.grupo || '',
+    };
+
+    console.log(
+      'Estados de estudiantes:',
+      estudiantesFormateados.map((e) => e.estado),
+    );
+
     return res.status(200).json({
       success: true,
-      data: asistencia,
+      data: respuesta,
     });
   } catch (error) {
     return next(error);
@@ -559,7 +630,7 @@ export const obtenerEstadisticasEstudiante = async (
     const registros = await Asistencia.find(query)
       .populate({
         path: 'cursoId',
-        select: 'nombre nivel grado seccion',
+        select: 'nombre nivel grado grupo',
       })
       .populate({
         path: 'asignaturaId',
@@ -753,7 +824,7 @@ export const obtenerResumen = async (req: RequestWithUser, res: Response, next: 
     const { fechaInicio, fechaFin, cursoId } = req.query;
 
     // Construir la consulta
-    const query: any = { escuelaId: req.user.escuelaId, finalizado: true };
+    const query: any = { escuelaId: req.user.escuelaId };
 
     if (cursoId) query.cursoId = cursoId;
 
@@ -764,11 +835,16 @@ export const obtenerResumen = async (req: RequestWithUser, res: Response, next: 
       if (fechaFin) query.fecha.$lte = new Date(fechaFin as string);
     }
 
+    // Si es docente, solo mostrar sus propios registros
+    if (req.user.tipo === 'DOCENTE') {
+      query.docenteId = req.user._id;
+    }
+
     // Obtener todos los registros de asistencia que coincidan con los filtros
     const registros = await Asistencia.find(query)
-      .populate('cursoId', 'nombre nivel grado seccion')
+      .populate('cursoId', 'nombre nivel grado grupo') // Cambiar 'seccion' por 'grupo'
       .populate('docenteId', 'nombre apellidos')
-      .select('fecha cursoId docenteId estudiantes createdAt');
+      .select('fecha cursoId docenteId estudiantes createdAt finalizado');
 
     // Transformar los datos para el formato que espera el frontend
     const resumen = registros.map((registro) => {
@@ -798,7 +874,7 @@ export const obtenerResumen = async (req: RequestWithUser, res: Response, next: 
       // Usar casting a any para acceso seguro a propiedades
       const cursoData = registro.cursoId
         ? (registro.cursoId as any)
-        : { nombre: 'Sin nombre', grado: '', seccion: '' };
+        : { nombre: 'Sin curso', grado: '', grupo: '' };
       const docenteData = registro.docenteId
         ? (registro.docenteId as any)
         : { nombre: 'Sin nombre', apellidos: '' };
@@ -808,9 +884,9 @@ export const obtenerResumen = async (req: RequestWithUser, res: Response, next: 
         fecha: registro.fecha,
         cursoId: cursoData._id || '',
         curso: {
-          nombre: cursoData.nombre || 'Sin nombre',
+          nombre: cursoData.nombre || 'Sin curso',
           grado: cursoData.grado || '',
-          seccion: cursoData.seccion || '',
+          grupo: cursoData.grupo || '',
         },
         totalEstudiantes,
         presentes,
@@ -825,6 +901,7 @@ export const obtenerResumen = async (req: RequestWithUser, res: Response, next: 
           apellidos: docenteData.apellidos || '',
         },
         createdAt: registro.createdAt,
+        finalizado: registro.finalizado || false,
       };
     });
 
@@ -983,7 +1060,7 @@ export const obtenerResumenPeriodo = async (
           nombre: cursoAny.nombre || '',
           nivel: cursoAny.nivel || '',
           grado: cursoAny.grado || '',
-          seccion: cursoAny.seccion || '',
+          grupo: cursoAny.grupo || '',
         },
         totalClases: registros.length,
         estudiantes: estudiantesEstadisticas,

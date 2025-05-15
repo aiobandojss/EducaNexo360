@@ -203,7 +203,8 @@ export const initializeSystem = async (req: Request, res: Response, next: NextFu
       next(error);
     } else {
       // Para otros errores, crear un ApiError genérico
-      next(new ApiError(500, `Error al inicializar el sistema: ${error.message}`));
+      const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
+      next(new ApiError(500, `Error al inicializar el sistema: ${errorMessage}`));
     }
   }
 };

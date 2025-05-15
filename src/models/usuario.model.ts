@@ -1,57 +1,29 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import bcrypt from 'bcryptjs';
-import { TipoUsuario, EstadoUsuario } from '../interfaces/IUsuario';
-
-export interface IUsuario extends Document {
-  email: string;
-  password: string;
-  nombre: string;
-  apellidos: string;
-  tipo: TipoUsuario;
-  estado: EstadoUsuario;
-  escuelaId: mongoose.Types.ObjectId;
-  permisos: string[];
-  perfil: {
-    telefono?: string;
-    direccion?: string;
-    foto?: string;
-  };
-  info_academica?: {
-    grado?: string;
-    grupo?: string;
-    codigo_estudiante?: string;
-    estudiantes_asociados?: mongoose.Types.ObjectId[]; // Para acudientes
-    asignaturas_asignadas?: {
-      // Para docentes
-      asignaturaId: mongoose.Types.ObjectId;
-      cursoId: mongoose.Types.ObjectId;
-    }[];
-  };
-  compararPassword(candidatePassword: string): Promise<boolean>;
-}
+import { IUsuario, TipoUsuario, EstadoUsuario } from '../interfaces/IUsuario';
 
 const UsuarioSchema = new Schema(
   {
     email: {
       type: String,
-      required: [true, 'El email es requerido'],
+      required: true,
       unique: true,
-      lowercase: true,
       trim: true,
+      lowercase: true,
     },
     password: {
       type: String,
-      required: [true, 'La contraseña es requerida'],
-      minlength: [6, 'La contraseña debe tener al menos 6 caracteres'],
+      required: true,
+      minlength: 6,
     },
     nombre: {
       type: String,
-      required: [true, 'El nombre es requerido'],
+      required: true,
       trim: true,
     },
     apellidos: {
       type: String,
-      required: [true, 'Los apellidos son requeridos'],
+      required: true,
       trim: true,
     },
     tipo: {
@@ -60,13 +32,13 @@ const UsuarioSchema = new Schema(
         'SUPER_ADMIN',
         'ADMIN',
         'DOCENTE',
-        'ACUDIENTE', // Cambiado de PADRE a ACUDIENTE
+        'ACUDIENTE',
         'ESTUDIANTE',
-        'COORDINADOR', // Nuevo rol
-        'RECTOR', // Nuevo rol
-        'ADMINISTRATIVO', // Nuevo rol
+        'COORDINADOR',
+        'RECTOR',
+        'ADMINISTRATIVO',
       ],
-      required: [true, 'El tipo de usuario es requerido'],
+      required: true,
     },
     estado: {
       type: String,
@@ -74,15 +46,16 @@ const UsuarioSchema = new Schema(
       default: 'ACTIVO',
     },
     escuelaId: {
-      type: Schema.Types.ObjectId,
+      type: mongoose.Schema.Types.ObjectId,
       ref: 'Escuela',
-      required: [true, 'La escuela es requerida'],
-    },
-    permisos: [
-      {
-        type: String,
+      required: function (this: IUsuario) {
+        return this.tipo !== 'SUPER_ADMIN';
       },
-    ],
+    },
+    permisos: {
+      type: [String],
+      default: [],
+    },
     perfil: {
       telefono: String,
       direccion: String,
@@ -92,41 +65,36 @@ const UsuarioSchema = new Schema(
       grado: String,
       grupo: String,
       codigo_estudiante: String,
-      estudiantes_asociados: [
-        {
-          type: Schema.Types.ObjectId,
-          ref: 'Usuario',
-        },
-      ],
+      estudiantes_asociados: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Usuario' }],
       asignaturas_asignadas: [
         {
-          asignaturaId: {
-            type: Schema.Types.ObjectId,
-            ref: 'Asignatura',
-          },
-          cursoId: {
-            type: Schema.Types.ObjectId,
-            ref: 'Curso',
-          },
+          asignaturaId: { type: mongoose.Schema.Types.ObjectId, ref: 'Asignatura' },
+          cursoId: { type: mongoose.Schema.Types.ObjectId, ref: 'Curso' },
         },
       ],
     },
+    // Campos para recuperación de contraseña
+    resetPasswordToken: String,
+    resetPasswordExpires: Date,
   },
-  {
-    timestamps: true,
-  },
+  { timestamps: true },
 );
 
-// Middleware para encriptar contraseña antes de guardar
+// Middleware pre-save para hash de contraseña
 UsuarioSchema.pre('save', async function (next) {
-  if (!this.isModified('password')) return next();
+  // Usar casting explícito para la parte del this
+  const user = this as any;
+
+  // Solo hashear la contraseña si ha sido modificada o es nueva
+  if (!user.isModified('password')) return next();
 
   try {
     const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
+    const hashedPassword = await bcrypt.hash(user.password, salt);
+    user.password = hashedPassword;
     next();
-  } catch (error) {
-    next(error as Error);
+  } catch (error: any) {
+    next(error);
   }
 });
 
@@ -137,13 +105,7 @@ UsuarioSchema.methods.compararPassword = async function (
   return bcrypt.compare(candidatePassword, this.password);
 };
 
-// Agregar índices para mejorar el rendimiento de las consultas
-UsuarioSchema.index({ email: 1 });
-UsuarioSchema.index({ tipo: 1 });
-UsuarioSchema.index({ escuelaId: 1 });
-UsuarioSchema.index({ 'info_academica.estudiantes_asociados': 1 });
-UsuarioSchema.index({ 'info_academica.asignaturas_asignadas.cursoId': 1 });
-
+// Crear y exportar el modelo
 const Usuario = mongoose.model<IUsuario>('Usuario', UsuarioSchema);
 
 export default Usuario;

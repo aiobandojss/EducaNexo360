@@ -1,55 +1,46 @@
-// src/interfaces/IAnuncio.ts
-
 import { Document, Types } from 'mongoose';
 
-export enum TipoAnuncio {
-  GENERAL = 'GENERAL',
-  CURSO = 'CURSO',
-  DOCENTES = 'DOCENTES',
-  PADRES = 'PADRES',
-  ESTUDIANTES = 'ESTUDIANTES',
-}
-
-export enum EstadoAnuncio {
-  BORRADOR = 'BORRADOR',
-  PUBLICADO = 'PUBLICADO',
-  ARCHIVADO = 'ARCHIVADO',
-}
-
-export interface IAdjuntoAnuncio {
+export interface IArchivoAnuncio {
   fileId: Types.ObjectId;
   nombre: string;
   tipo: string;
   tamaño: number;
-  fechaSubida: Date;
 }
 
-// Interfaz base para anuncios
-export interface IAnuncioBase {
+export interface IImagenPortada {
+  fileId: Types.ObjectId;
+  url: string;
+}
+
+export interface ILectura {
+  usuarioId: Types.ObjectId;
+  fechaLectura: Date;
+}
+
+export interface IAnuncio extends Document {
   titulo: string;
   contenido: string;
-  tipo: TipoAnuncio;
-  estado: EstadoAnuncio;
-  creadorId: Types.ObjectId;
+  creador: Types.ObjectId;
   escuelaId: Types.ObjectId;
-  cursoId?: Types.ObjectId; // Opcional, solo si es para un curso específico
-  destacado: boolean;
   fechaPublicacion: Date;
-  fechaExpiracion?: Date;
-  adjuntos?: IAdjuntoAnuncio[];
-  destinatarios?: Types.ObjectId[]; // IDs de usuarios específicos
-  lecturas?: {
-    usuarioId: Types.ObjectId;
-    fechaLectura: Date;
-  }[];
-  imagenPortada?: {
-    fileId: Types.ObjectId;
-    url: string;
-  };
-}
-
-// Interfaz para el documento MongoDB
-export interface IAnuncio extends IAnuncioBase, Document {
+  estaPublicado: boolean;
+  paraEstudiantes: boolean;
+  paraDocentes: boolean;
+  paraPadres: boolean;
+  destacado: boolean;
+  archivosAdjuntos: IArchivoAnuncio[];
+  imagenPortada?: IImagenPortada;
+  lecturas: ILectura[];
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface IAnuncioInput {
+  titulo: string;
+  contenido: string;
+  paraEstudiantes?: boolean;
+  paraDocentes?: boolean;
+  paraPadres?: boolean;
+  destacado?: boolean;
+  estaPublicado?: boolean;
 }

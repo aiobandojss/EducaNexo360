@@ -20,6 +20,7 @@ interface JwtPayload {
   sub: string;
   tipo: string;
   escuelaId?: string; // Hecho opcional para evitar errores
+  user?: any; // Added to support user data in token
 }
 
 interface MongooseUser extends mongoose.Document {
@@ -152,6 +153,77 @@ export const authorize = (...allowedRoles: string[]) => {
 // Helper para verificar si un usuario tiene acceso administrativo
 export const hasAdminAccess = (userType: string): boolean => {
   return ROLES_ADMINISTRATIVOS.includes(userType);
+};
+
+export const authenticateDownload = async (
+  req: RequestWithUser,
+  res: Response,
+  next: NextFunction,
+) => {
+  try {
+    let token = '';
+
+    // Primero intentar obtener el token del header de Authorization
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7);
+    }
+    // Si no existe en el header, intentar obtenerlo del query param
+    else if (req.query.token) {
+      token = req.query.token as string;
+    }
+
+    // Si no hay token, retornar error de autenticación
+    if (!token) {
+      throw new ApiError(401, 'No autorizado: Token no proporcionado');
+    }
+
+    // Verificar el token
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET || 'tu_jwt_secret_muy_seguro',
+    ) as JwtPayload;
+
+    // Obtener el usuario desde la base de datos (igual que en authenticate)
+    const user = (await Usuario.findById(decoded.sub).select('-password')) as MongooseUser;
+
+    if (!user) {
+      throw new ApiError(401, 'No autorizado - Usuario no encontrado');
+    }
+
+    if (user.estado !== 'ACTIVO') {
+      throw new ApiError(401, 'No autorizado - Usuario inactivo');
+    }
+
+    // Asignar el usuario al request
+    // Manejar caso especial para SUPER_ADMIN que puede no tener escuelaId
+    if (user.tipo === 'SUPER_ADMIN' && !user.escuelaId) {
+      req.user = {
+        _id: user._id.toString(),
+        escuelaId: '', // String vacío para mantener la compatibilidad con la interfaz
+        tipo: user.tipo,
+        email: user.email,
+        nombre: user.nombre,
+        apellidos: user.apellidos,
+        estado: user.estado,
+      };
+    } else {
+      req.user = {
+        _id: user._id.toString(),
+        escuelaId: user.escuelaId ? user.escuelaId.toString() : '', // Protección adicional
+        tipo: user.tipo,
+        email: user.email,
+        nombre: user.nombre,
+        apellidos: user.apellidos,
+        estado: user.estado,
+      };
+    }
+
+    next();
+  } catch (error) {
+    // Si el token es inválido o ha expirado
+    next(new ApiError(401, 'No autorizado: Token inválido o expirado'));
+  }
 };
 
 // Middleware específico para verificar si un usuario puede ver cualquier perfil

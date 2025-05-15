@@ -18,7 +18,7 @@ import {
   obtenerEstadisticasEstudiante,
   obtenerAsistenciaDia,
   obtenerResumenPeriodo,
-  obtenerResumen, // Añadir esta importación
+  obtenerResumen,
 } from '../controllers/asistencia.controller';
 
 const router = express.Router();
@@ -27,7 +27,6 @@ const router = express.Router();
 router.use(authenticate);
 
 // Rutas para estadísticas y consultas especiales (deben ir antes de las rutas con :id)
-// Permitir acceso a roles administrativos
 router.get('/dia', obtenerAsistenciaDia as RequestHandler);
 router.get('/estadisticas/curso/:cursoId', obtenerEstadisticasCurso as RequestHandler);
 router.get(
@@ -35,7 +34,7 @@ router.get(
   obtenerEstadisticasEstudiante as RequestHandler,
 );
 
-// Ruta para obtener resumen general - Debe ir antes de las rutas con parámetros
+// Ruta para obtener resumen general
 router.get('/resumen', obtenerResumen as RequestHandler);
 
 router.get(

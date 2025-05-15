@@ -1,75 +1,84 @@
-// src/routes/anuncio.routes.ts
-
 import express from 'express';
 import anuncioController from '../controllers/anuncio.controller';
 import { authenticate, authorize } from '../middleware/auth.middleware';
 import { validate } from '../middleware/validate.middleware';
-import {
-  crearAnuncioValidation,
-  actualizarAnuncioValidation,
-  publicarAnuncioValidation,
-} from '../validations/anuncio.validation';
-import gridfsManager from '../config/gridfs';
+import anuncioValidation from '../validations/anuncio.validation';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
 
 const router = express.Router();
+
+// Configurar un almacenamiento temporal para los archivos
+// Usaremos el disco en lugar de GridFS para evitar problemas de compatibilidad de tipos
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const uploadDir = path.join(__dirname, '../../uploads/temp');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    cb(null, uniqueSuffix + '-' + file.originalname);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB límite de tamaño
+  },
+});
 
 // Todas las rutas requieren autenticación
 router.use(authenticate);
 
-// Configuración para multer: procesar múltiples archivos, incluyendo la imagen de portada
-const upload = gridfsManager.getUpload();
-const uploadFiles = upload
-  ? upload.fields([
-      { name: 'imagenPortada', maxCount: 1 },
-      { name: 'adjuntos', maxCount: 5 },
-    ])
-  : [];
-
-// Rutas para gestionar anuncios
+// Rutas para crear y gestionar anuncios
 router.post(
   '/',
-  authorize('ADMIN', 'DOCENTE'),
-  uploadFiles,
-  validate(crearAnuncioValidation),
-  anuncioController.crearAnuncio,
-);
-
-router.get(
-  '/',
-  authorize('ADMIN', 'DOCENTE', 'ESTUDIANTE', 'PADRE'),
-  anuncioController.obtenerAnuncios,
-);
-
-router.get(
-  '/:id',
-  authorize('ADMIN', 'DOCENTE', 'ESTUDIANTE', 'PADRE'),
-  anuncioController.obtenerAnuncioPorId,
+  authorize('ADMIN', 'DOCENTE', 'RECTOR', 'COORDINADOR'),
+  validate(anuncioValidation.crear),
+  anuncioController.crear,
 );
 
 router.put(
   '/:id',
-  authorize('ADMIN', 'DOCENTE'),
-  uploadFiles,
-  validate(actualizarAnuncioValidation),
-  anuncioController.actualizarAnuncio,
+  authorize('ADMIN', 'DOCENTE', 'RECTOR', 'COORDINADOR'),
+  validate(anuncioValidation.actualizar),
+  anuncioController.actualizar,
 );
 
 router.patch(
   '/:id/publicar',
-  authorize('ADMIN', 'DOCENTE'),
-  validate(publicarAnuncioValidation),
-  anuncioController.publicarAnuncio,
+  authorize('ADMIN', 'DOCENTE', 'RECTOR', 'COORDINADOR'),
+  anuncioController.publicar,
 );
 
-router.patch('/:id/archivar', authorize('ADMIN', 'DOCENTE'), anuncioController.archivarAnuncio);
-
-// Rutas para archivos
-router.get('/:id/imagen/:imagenId', anuncioController.obtenerImagenPortada);
-
-router.get(
-  '/:id/adjunto/:adjuntoId',
-  authorize('ADMIN', 'DOCENTE', 'ESTUDIANTE', 'PADRE'),
-  anuncioController.descargarAdjunto,
+router.delete(
+  '/:id',
+  authorize('ADMIN', 'DOCENTE', 'RECTOR', 'COORDINADOR'),
+  anuncioController.eliminar,
 );
+
+// Rutas de adjuntos
+router.post(
+  '/:id/adjuntos',
+  authorize('ADMIN', 'DOCENTE', 'RECTOR', 'COORDINADOR'),
+  upload.array('archivos', 5),
+  anuncioController.agregarAdjuntos,
+);
+
+router.delete(
+  '/:id/adjuntos/:archivoId',
+  authorize('ADMIN', 'DOCENTE', 'RECTOR', 'COORDINADOR'),
+  anuncioController.eliminarAdjunto,
+);
+
+// Rutas de consulta
+router.get('/', anuncioController.obtenerTodos);
+router.get('/:id', anuncioController.obtenerPorId);
+router.get('/:id/adjunto/:archivoId', authenticate, anuncioController.obtenerAdjunto);
 
 export default router;

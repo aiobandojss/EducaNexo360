@@ -39,6 +39,8 @@ export interface IUsuarioBase {
       cursoId: Types.ObjectId;
     }[];
   };
+  resetPasswordToken?: string;
+  resetPasswordExpires?: Date;
 }
 
 export interface IUsuario extends IUsuarioBase, Document {

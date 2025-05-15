@@ -15,7 +15,6 @@ const router = express.Router();
 router.use(authenticate);
 
 // Rutas para administradores y personal administrativo
-// (ADMIN, RECTOR, COORDINADOR, ADMINISTRATIVO)
 router.post('/', authorize('ADMIN'), validate(crearCursoValidation), cursoController.crear);
 
 router.put(
@@ -40,6 +39,13 @@ router.delete(
   authorize('ADMIN'),
   validate(removerEstudiantesValidation),
   cursoController.removerEstudiantes,
+);
+
+// Nueva ruta para obtener estudiantes de un curso
+router.get(
+  '/:id/estudiantes',
+  authorize('ADMIN', 'DOCENTE', 'RECTOR', 'COORDINADOR', 'ADMINISTRATIVO'),
+  cursoController.obtenerEstudiantes,
 );
 
 // Rutas de consulta (accesibles para ADMIN, RECTOR, COORDINADOR, ADMINISTRATIVO y DOCENTE)

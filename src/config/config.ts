@@ -28,7 +28,7 @@ export default {
     senderEmail: process.env.EMAIL_SENDER_EMAIL || 'no-reply@educanexo360.com',
   },
 
-  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
+  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3001',
 
   uploadLimit: process.env.UPLOAD_LIMIT || '5mb',
 };

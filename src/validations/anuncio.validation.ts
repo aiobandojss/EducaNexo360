@@ -1,138 +1,133 @@
-// src/validations/anuncio.validation.ts
+import { body, param, query } from 'express-validator';
 
-import { body } from 'express-validator';
-import { TipoAnuncio, EstadoAnuncio } from '../interfaces/IAnuncio';
+export const anuncioValidation = {
+  // Validación para crear un anuncio
+  crear: [
+    body('titulo')
+      .notEmpty()
+      .withMessage('El título es obligatorio')
+      .isString()
+      .withMessage('El título debe ser texto')
+      .isLength({ min: 3, max: 150 })
+      .withMessage('El título debe tener entre 3 y 150 caracteres'),
 
-export const crearAnuncioValidation = [
-  body('titulo')
-    .notEmpty()
-    .withMessage('El título es requerido')
-    .isLength({ max: 100 })
-    .withMessage('El título no puede exceder los 100 caracteres')
-    .trim(),
+    body('contenido')
+      .notEmpty()
+      .withMessage('El contenido es obligatorio')
+      .isString()
+      .withMessage('El contenido debe ser texto'),
 
-  body('contenido').notEmpty().withMessage('El contenido es requerido'),
+    body('paraEstudiantes')
+      .optional()
+      .isBoolean()
+      .withMessage('El campo paraEstudiantes debe ser un valor booleano'),
 
-  body('tipo').optional().isIn(Object.values(TipoAnuncio)).withMessage('Tipo de anuncio no válido'),
+    body('paraDocentes')
+      .optional()
+      .isBoolean()
+      .withMessage('El campo paraDocentes debe ser un valor booleano'),
 
-  body('estado')
-    .optional()
-    .isIn(Object.values(EstadoAnuncio))
-    .withMessage('Estado de anuncio no válido'),
+    body('paraPadres')
+      .optional()
+      .isBoolean()
+      .withMessage('El campo paraPadres debe ser un valor booleano'),
 
-  body('cursoId').optional().isMongoId().withMessage('ID de curso inválido'),
+    body('destacado')
+      .optional()
+      .isBoolean()
+      .withMessage('El campo destacado debe ser un valor booleano'),
 
-  body('destacado').optional().isBoolean().withMessage('Destacado debe ser un valor booleano'),
+    body('estaPublicado')
+      .optional()
+      .isBoolean()
+      .withMessage('El campo estaPublicado debe ser un valor booleano'),
+  ],
 
-  body('fechaPublicacion')
-    .optional()
-    .isISO8601()
-    .withMessage('La fecha de publicación debe ser válida'),
+  // Validación para actualizar un anuncio
+  actualizar: [
+    param('id').isMongoId().withMessage('ID de anuncio inválido'),
 
-  body('fechaExpiracion')
-    .optional()
-    .isISO8601()
-    .withMessage('La fecha de expiración debe ser válida')
-    .custom((value, { req }) => {
-      if (req.body.fechaPublicacion) {
-        const fechaPublicacion = new Date(req.body.fechaPublicacion);
-        const fechaExpiracion = new Date(value);
-        if (fechaExpiracion < fechaPublicacion) {
-          throw new Error('La fecha de expiración no puede ser anterior a la fecha de publicación');
-        }
-      }
-      return true;
-    }),
+    body('titulo')
+      .optional()
+      .isString()
+      .withMessage('El título debe ser texto')
+      .isLength({ min: 3, max: 150 })
+      .withMessage('El título debe tener entre 3 y 150 caracteres'),
 
-  body('destinatarios')
-    .optional()
-    .custom(() => {
-      // Ignoramos los destinatarios específicos - solo se permiten anuncios por grupos o generales
-      console.warn(
-        'La propiedad destinatarios está deshabilitada. Los anuncios ahora son solo por grupos o generales.',
-      );
-      return true;
-    }),
-];
+    body('contenido').optional().isString().withMessage('El contenido debe ser texto'),
 
-export const actualizarAnuncioValidation = [
-  body('titulo')
-    .optional()
-    .notEmpty()
-    .withMessage('El título no puede estar vacío')
-    .isLength({ max: 100 })
-    .withMessage('El título no puede exceder los 100 caracteres')
-    .trim(),
+    body('paraEstudiantes')
+      .optional()
+      .isBoolean()
+      .withMessage('El campo paraEstudiantes debe ser un valor booleano'),
 
-  body('contenido').optional().notEmpty().withMessage('El contenido no puede estar vacío'),
+    body('paraDocentes')
+      .optional()
+      .isBoolean()
+      .withMessage('El campo paraDocentes debe ser un valor booleano'),
 
-  body('tipo').optional().isIn(Object.values(TipoAnuncio)).withMessage('Tipo de anuncio no válido'),
+    body('paraPadres')
+      .optional()
+      .isBoolean()
+      .withMessage('El campo paraPadres debe ser un valor booleano'),
 
-  body('estado')
-    .optional()
-    .isIn(Object.values(EstadoAnuncio))
-    .withMessage('Estado de anuncio no válido'),
+    body('destacado')
+      .optional()
+      .isBoolean()
+      .withMessage('El campo destacado debe ser un valor booleano'),
 
-  body('cursoId').optional().isMongoId().withMessage('ID de curso inválido'),
+    body('estaPublicado')
+      .optional()
+      .isBoolean()
+      .withMessage('El campo estaPublicado debe ser un valor booleano'),
+  ],
 
-  body('destacado').optional().isBoolean().withMessage('Destacado debe ser un valor booleano'),
+  // Validación para obtener un anuncio
+  obtener: [param('id').isMongoId().withMessage('ID de anuncio inválido')],
 
-  body('fechaPublicacion')
-    .optional()
-    .isISO8601()
-    .withMessage('La fecha de publicación debe ser válida'),
+  // Validación para obtener adjunto
+  adjunto: [
+    param('id').isMongoId().withMessage('ID de anuncio inválido'),
+    param('archivoId').isMongoId().withMessage('ID de archivo inválido'),
+  ],
 
-  body('fechaExpiracion')
-    .optional()
-    .isISO8601()
-    .withMessage('La fecha de expiración debe ser válida')
-    .custom((value, { req }) => {
-      const fechaExpiracion = new Date(value);
-      let fechaPublicacion;
+  // Validaciones para listar
+  listar: [
+    query('pagina')
+      .optional()
+      .isInt({ min: 1 })
+      .withMessage('La página debe ser un número mayor a 0')
+      .toInt(),
 
-      if (req.body.fechaPublicacion) {
-        fechaPublicacion = new Date(req.body.fechaPublicacion);
-      } else if (req.anuncio && req.anuncio.fechaPublicacion) {
-        fechaPublicacion = new Date(req.anuncio.fechaPublicacion);
-      } else {
-        return true; // No hay fecha de publicación para comparar
-      }
+    query('limite')
+      .optional()
+      .isInt({ min: 1, max: 100 })
+      .withMessage('El límite debe ser un número entre 1 y 100')
+      .toInt(),
 
-      if (fechaExpiracion < fechaPublicacion) {
-        throw new Error('La fecha de expiración no puede ser anterior a la fecha de publicación');
-      }
-      return true;
-    }),
+    query('soloDestacados')
+      .optional()
+      .isBoolean()
+      .withMessage('soloDestacados debe ser un valor booleano')
+      .toBoolean(),
 
-  body('destinatarios')
-    .optional()
-    .custom(() => {
-      // Ignoramos los destinatarios específicos - solo se permiten anuncios por grupos o generales
-      console.warn(
-        'La propiedad destinatarios está deshabilitada. Los anuncios ahora son solo por grupos o generales.',
-      );
-      return true;
-    }),
-];
+    query('soloPublicados')
+      .optional()
+      .isBoolean()
+      .withMessage('soloPublicados debe ser un valor booleano')
+      .toBoolean(),
 
-export const publicarAnuncioValidation = [
-  body('fechaPublicacion')
-    .optional()
-    .isISO8601()
-    .withMessage('La fecha de publicación debe ser válida'),
+    query('paraRol')
+      .optional()
+      .isIn(['ESTUDIANTE', 'DOCENTE', 'PADRE'])
+      .withMessage('Rol inválido'),
+  ],
 
-  body('fechaExpiracion')
-    .optional()
-    .isISO8601()
-    .withMessage('La fecha de expiración debe ser válida')
-    .custom((value, { req }) => {
-      if (req.body.fechaPublicacion) {
-        const fechaPublicacion = new Date(req.body.fechaPublicacion);
-        const fechaExpiracion = new Date(value);
-        if (fechaExpiracion < fechaPublicacion) {
-          throw new Error('La fecha de expiración no puede ser anterior a la fecha de publicación');
-        }
-      }
-      return true;
-    }),
-];
+  // Validación para publicar un anuncio
+  publicar: [param('id').isMongoId().withMessage('ID de anuncio inválido')],
+
+  // Validación para eliminar un anuncio
+  eliminar: [param('id').isMongoId().withMessage('ID de anuncio inválido')],
+};
+
+export default anuncioValidation;

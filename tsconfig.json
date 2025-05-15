@@ -1,11 +1,12 @@
 {
   "compilerOptions": {
-    "target": "es2018",
+    "target": "ES2020",
     "module": "commonjs",
     "lib": ["es2018", "esnext.asynciterable"],
     "skipLibCheck": true,
     "sourceMap": true,
     "outDir": "./dist",
+    "rootDir": "./src",
     "strict": true,
     "forceConsistentCasingInFileNames": true,
     "moduleResolution": "node",
@@ -32,12 +33,16 @@
     }
   },
   "include": [
+    "src/**/*",
     "src/**/*.ts",
     "src/**/*.d.ts",
     "src/**/*.js",
     "src/tests/mensajeria/test-mensajes-endpoints.mjs",
     "src/tests/notificaciones.test.mjs",
-    ".mjs"
+    "check-solicitudes-mongoose.js",
+    "reset-passwords.js",
+    ".mjs",
+    "app.js"
   ],
   "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }

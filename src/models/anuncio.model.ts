@@ -1,28 +1,33 @@
-// src/models/anuncio.model.ts
-
 import mongoose, { Schema } from 'mongoose';
-import { IAnuncio, TipoAnuncio, EstadoAnuncio } from '../interfaces/IAnuncio';
+import { IAnuncio } from '../interfaces/IAnuncio';
 
-const AdjuntoSchema = new Schema({
+const ArchivoSchema = new Schema({
   fileId: {
     type: Schema.Types.ObjectId,
     required: true,
   },
   nombre: {
     type: String,
-    required: [true, 'El nombre del archivo es requerido'],
+    required: true,
   },
   tipo: {
     type: String,
-    required: [true, 'El tipo del archivo es requerido'],
+    required: true,
   },
   tamaño: {
     type: Number,
-    required: [true, 'El tamaño del archivo es requerido'],
+    required: true,
   },
-  fechaSubida: {
-    type: Date,
-    default: Date.now,
+});
+
+const ImagenPortadaSchema = new Schema({
+  fileId: {
+    type: Schema.Types.ObjectId,
+    required: true,
+  },
+  url: {
+    type: String,
+    required: true,
   },
 });
 
@@ -38,93 +43,64 @@ const LecturaSchema = new Schema({
   },
 });
 
-const ImagenPortadaSchema = new Schema({
-  fileId: {
-    type: Schema.Types.ObjectId,
-    required: true,
-  },
-  url: {
-    type: String,
-    required: true,
-  },
-});
-
 const AnuncioSchema = new Schema(
   {
     titulo: {
       type: String,
-      required: [true, 'El título del anuncio es requerido'],
+      required: true,
       trim: true,
     },
     contenido: {
       type: String,
-      required: [true, 'El contenido del anuncio es requerido'],
+      required: true,
     },
-    tipo: {
-      type: String,
-      enum: Object.values(TipoAnuncio),
-      default: TipoAnuncio.GENERAL,
-    },
-    estado: {
-      type: String,
-      enum: Object.values(EstadoAnuncio),
-      default: EstadoAnuncio.BORRADOR,
-    },
-    creadorId: {
+    creador: {
       type: Schema.Types.ObjectId,
       ref: 'Usuario',
-      required: [true, 'El creador del anuncio es requerido'],
+      required: true,
     },
     escuelaId: {
       type: Schema.Types.ObjectId,
       ref: 'Escuela',
-      required: [true, 'La escuela es requerida'],
-    },
-    cursoId: {
-      type: Schema.Types.ObjectId,
-      ref: 'Curso',
-    },
-    destacado: {
-      type: Boolean,
-      default: false,
+      required: true,
     },
     fechaPublicacion: {
       type: Date,
       default: Date.now,
     },
-    fechaExpiracion: {
-      type: Date,
+    estaPublicado: {
+      type: Boolean,
+      default: false,
     },
-    adjuntos: [AdjuntoSchema],
-    destinatarios: [
-      {
-        type: Schema.Types.ObjectId,
-        ref: 'Usuario',
-      },
-    ],
-    lecturas: [LecturaSchema],
+    paraEstudiantes: {
+      type: Boolean,
+      default: true,
+    },
+    paraDocentes: {
+      type: Boolean,
+      default: false,
+    },
+    paraPadres: {
+      type: Boolean,
+      default: true,
+    },
+    destacado: {
+      type: Boolean,
+      default: false,
+    },
+    archivosAdjuntos: [ArchivoSchema],
     imagenPortada: ImagenPortadaSchema,
+    lecturas: [LecturaSchema],
   },
   {
     timestamps: true,
   },
 );
 
-// Middleware para validar fechas
-AnuncioSchema.pre('save', function (next) {
-  if (this.fechaExpiracion && this.fechaExpiracion < this.fechaPublicacion) {
-    next(new Error('La fecha de expiración no puede ser anterior a la fecha de publicación'));
-  }
-  next();
-});
-
-// Índices para mejorar las consultas
-AnuncioSchema.index({ escuelaId: 1, estado: 1 });
-AnuncioSchema.index({ escuelaId: 1, tipo: 1 });
-AnuncioSchema.index({ escuelaId: 1, creadorId: 1 });
-AnuncioSchema.index({ escuelaId: 1, cursoId: 1 });
-AnuncioSchema.index({ destinatarios: 1 });
+// Índices para mejorar el rendimiento de consultas
+AnuncioSchema.index({ escuelaId: 1, estaPublicado: 1 });
+AnuncioSchema.index({ creador: 1 });
+AnuncioSchema.index({ destacado: 1 });
 AnuncioSchema.index({ fechaPublicacion: -1 });
-AnuncioSchema.index({ destacado: 1, fechaPublicacion: -1 });
 
 export default mongoose.model<IAnuncio>('Anuncio', AnuncioSchema);

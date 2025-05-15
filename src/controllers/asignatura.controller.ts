@@ -181,6 +181,29 @@ class AsignaturaController {
       next(error);
     }
   }
+
+  async obtenerPorCurso(req: RequestWithUser, res: Response, next: NextFunction) {
+    try {
+      if (!req.user) {
+        throw new ApiError(401, 'No autorizado');
+      }
+
+      const { cursoId } = req.params;
+
+      const asignaturas = await Asignatura.find({
+        cursoId,
+        escuelaId: req.user.escuelaId,
+        estado: 'ACTIVO',
+      }).populate('docenteId', 'nombre apellidos');
+
+      res.json({
+        success: true,
+        data: asignaturas,
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 export default new AsignaturaController();

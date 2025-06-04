@@ -6,6 +6,19 @@ import crypto from 'crypto';
 import Usuario from '../models/usuario.model';
 import config from '../config/config';
 
+// Usamos la misma interfaz que está definida en auth.middleware.ts
+interface RequestWithUser extends Request {
+  user?: {
+    _id: string;
+    escuelaId: string;
+    tipo: string;
+    email: string;
+    nombre: string;
+    apellidos: string;
+    estado: string;
+  };
+}
+
 // Exportar como objeto en lugar de clase para compatibilidad
 export const authController = {
   async login(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -166,6 +179,42 @@ export const authController = {
       });
     } catch (error) {
       console.error('Error en resetPassword:', error);
+      next(error);
+    }
+  },
+
+  // Nueva función para verificar token y devolver datos del usuario
+  // Usamos RequestWithUser en lugar de Request para acceder a req.user
+  async verifyToken(req: RequestWithUser, res: Response, next: NextFunction): Promise<void> {
+    try {
+      // El middleware de autenticación ya verificó el token y colocó el usuario en req
+      if (!req.user) {
+        throw new ApiError(401, 'Token inválido o expirado');
+      }
+
+      // Preparar objeto de usuario para devolver (sin información sensible)
+      const safeUser = {
+        _id: req.user._id,
+        nombre: req.user.nombre,
+        apellidos: req.user.apellidos,
+        email: req.user.email,
+        tipo: req.user.tipo,
+        escuelaId: req.user.escuelaId,
+        estado: req.user.estado,
+      };
+
+      // Registrar éxito de verificación para debugging
+      console.log(`Token verificado exitosamente para usuario: ${safeUser.email}`);
+
+      // Responder con los datos del usuario
+      res.json({
+        success: true,
+        data: {
+          user: safeUser,
+        },
+      });
+    } catch (error) {
+      console.error('Error en verifyToken:', error);
       next(error);
     }
   },

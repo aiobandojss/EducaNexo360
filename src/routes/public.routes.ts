@@ -25,6 +25,17 @@ router.get('/cursos/invitacion/:codigoInvitacion', publicController.obtenerCurso
 // Obtener información básica de un curso (pública)
 router.get('/cursos/:cursoId/info', publicController.obtenerInfoCursoPublica);
 
+router.get(
+  '/estudiantes/buscar/:codigoInvitacion',
+  publicController.buscarEstudiantesConInvitacion,
+);
+
+// Obtener información de estudiante específico usando código de invitación
+router.get(
+  '/estudiantes/:estudianteId/invitacion/:codigoInvitacion',
+  publicController.obtenerEstudianteConInvitacion,
+);
+
 // Ruta para crear solicitud de registro (pública)
 router.post(
   '/registro/solicitudes',

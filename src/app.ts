@@ -28,9 +28,11 @@ import asistenciaRoutes from './routes/asistencia.routes';
 import systemRoutes from './routes/system.routes';
 import superadminRoutes from './routes/superadmin.routes';
 
+// RUTAS PARA EL SISTEMA DE INVITACIONES Y REGISTRO
 import invitacionRoutes from './routes/invitacion.routes';
 import registroRoutes from './routes/registro.routes';
 import publicRoutes from './routes/public.routes';
+import estudianteRoutes from './routes/estudiante.routes';
 
 // Configuración de variables de entorno
 dotenv.config();
@@ -43,7 +45,30 @@ const app: Express = express();
 
 // ===== CONFIGURACIÓN CORS MEJORADA =====
 const corsOptions = {
-  origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*',
+  origin: function (
+    origin: string | undefined,
+    callback: (error: Error | null, allow?: boolean) => void,
+  ) {
+    const allowedOrigins = process.env.ALLOWED_ORIGINS
+      ? process.env.ALLOWED_ORIGINS.split(',')
+      : ['http://localhost:3000', 'http://localhost:3001'];
+
+    // Añadir explícitamente el dominio de Vercel
+    allowedOrigins.push('https://educa-nexo360-react.vercel.app');
+
+    // Permitir solicitudes sin origen (como Postman o solicitudes del servidor)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.log(`Solicitud CORS bloqueada: ${origin}`);
+      // Durante el desarrollo/diagnóstico podemos permitir todos los orígenes
+      // En producción deberías cambiar esto a:
+      // callback(new Error('No permitido por CORS'));
+      callback(null, true);
+    }
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
@@ -91,9 +116,12 @@ apiRouter.use('/anuncios', anuncioRoutes);
 apiRouter.use('/asistencia', asistenciaRoutes);
 apiRouter.use('/system', systemRoutes);
 apiRouter.use('/superadmin', superadminRoutes);
+
+// RUTAS PARA EL SISTEMA DE INVITACIONES Y REGISTRO
 apiRouter.use('/invitaciones', invitacionRoutes);
 apiRouter.use('/registro', registroRoutes);
 apiRouter.use('/public', publicRoutes);
+apiRouter.use('/estudiantes', estudianteRoutes); // ✅ CORREGIDO: era '/api/estudiantes'
 
 // ===== MONTAR EL ROUTER API =====
 // Si hay basePath, lo usamos; de lo contrario, montamos en /api

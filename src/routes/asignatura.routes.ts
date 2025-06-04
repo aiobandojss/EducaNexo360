@@ -21,6 +21,13 @@ router.get(
   asignaturaController.obtenerPorCurso,
 );
 
+router.get(
+  '/disponibles/:cursoId',
+  authenticate,
+  authorize('ADMIN', 'DOCENTE', 'RECTOR', 'COORDINADOR', 'ADMINISTRATIVO'),
+  asignaturaController.obtenerNoAsignadasACurso,
+);
+
 // Rutas para administradores
 router.post(
   '/',
@@ -44,6 +51,13 @@ router.put(
   authorize('ADMIN'),
   validate(actualizarPeriodosValidation),
   asignaturaController.actualizarPeriodos,
+);
+
+// Añadir esta ruta en asignatura.routes.ts justo después de la ruta /curso/:cursoId
+router.get(
+  '/no-asignadas/:cursoId',
+  authorize('ADMIN', 'DOCENTE', 'RECTOR', 'COORDINADOR', 'ADMINISTRATIVO'),
+  asignaturaController.obtenerNoAsignadasACurso,
 );
 
 // Rutas de consulta (accesibles para ADMIN y DOCENTE)

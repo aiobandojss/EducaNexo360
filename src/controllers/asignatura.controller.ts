@@ -59,13 +59,28 @@ class AsignaturaController {
         query.estado = estado;
       }
 
+      // Modificar la forma en que se hace populate para garantizar todos los datos del docente
       const asignaturas = await Asignatura.find(query)
-        .populate(['cursoId', 'docenteId'])
+        .populate({
+          path: 'docenteId',
+          select: 'nombre apellidos email tipo estado', // Incluir todos los campos necesarios
+          model: 'Usuario',
+        })
+        .populate('cursoId', 'nombre grado grupo nivel jornada año_academico')
         .sort({ nombre: 1 });
+
+      // Transformación de datos para asegurar consistencia
+      const asignaturasConDocentes = asignaturas.map((asignatura) => {
+        const doc = asignatura.toObject();
+        return {
+          ...doc,
+          docente: doc.docenteId, // Asegurar que el campo docente siempre esté presente
+        };
+      });
 
       res.json({
         success: true,
-        data: asignaturas,
+        data: asignaturasConDocentes,
       });
     } catch (error) {
       next(error);
@@ -81,15 +96,26 @@ class AsignaturaController {
       const asignatura = await Asignatura.findOne({
         _id: req.params.id,
         escuelaId: req.user.escuelaId,
-      }).populate(['cursoId', 'docenteId']);
+      })
+        .populate({
+          path: 'docenteId',
+          select: 'nombre apellidos email tipo estado',
+          model: 'Usuario',
+        })
+        .populate('cursoId', 'nombre grado grupo nivel jornada año_academico');
 
       if (!asignatura) {
         throw new ApiError(404, 'Asignatura no encontrada');
       }
 
+      const doc = asignatura.toObject();
+
       res.json({
         success: true,
-        data: asignatura,
+        data: {
+          ...doc,
+          docente: doc.docenteId, // Asegurar que el campo docente siempre esté presente
+        },
       });
     } catch (error) {
       next(error);
@@ -194,13 +220,99 @@ class AsignaturaController {
         cursoId,
         escuelaId: req.user.escuelaId,
         estado: 'ACTIVO',
-      }).populate('docenteId', 'nombre apellidos');
+      }).populate({
+        path: 'docenteId',
+        select: 'nombre apellidos email tipo estado',
+        model: 'Usuario',
+      });
+
+      // Transformar datos para asegurar consistencia
+      const asignaturasFormateadas = asignaturas.map((asignatura) => {
+        const doc = asignatura.toObject();
+        return {
+          ...doc,
+          docente: doc.docenteId,
+        };
+      });
 
       res.json({
         success: true,
-        data: asignaturas,
+        data: asignaturasFormateadas,
       });
     } catch (error) {
+      next(error);
+    }
+  }
+
+  async obtenerNoAsignadasACurso(req: RequestWithUser, res: Response, next: NextFunction) {
+    try {
+      if (!req.user) {
+        throw new ApiError(401, 'No autorizado');
+      }
+
+      const { cursoId } = req.params;
+      console.log(`Buscando asignaturas no asignadas al curso ${cursoId}`);
+
+      // Primero, obtener todas las asignaturas que ya están asignadas a este curso
+      interface AsignaturaDoc {
+        _id: any;
+      }
+
+      const asignaturasAsignadas = await Asignatura.find({
+        cursoId,
+        escuelaId: req.user.escuelaId,
+      }).select('_id');
+
+      console.log(`Encontradas ${asignaturasAsignadas.length} asignaturas ya asignadas al curso`);
+
+      // Obtener IDs de asignaturas ya asignadas
+      const idsAsignadas = asignaturasAsignadas.map((a: AsignaturaDoc) => a._id.toString());
+
+      // Ahora buscar asignaturas que no estén asignadas a este curso
+      interface AsignaturaQuery {
+        escuelaId: string;
+        estado: string;
+        _id?: { $nin: string[] };
+      }
+
+      const query: AsignaturaQuery = {
+        escuelaId: req.user.escuelaId,
+        estado: 'ACTIVO',
+      };
+
+      // Solo aplicar filtro de exclusión si hay asignaturas asignadas
+      if (idsAsignadas.length > 0) {
+        query._id = { $nin: idsAsignadas };
+      }
+
+      console.log('Ejecutando consulta para asignaturas no asignadas:', JSON.stringify(query));
+
+      const asignaturas = await Asignatura.find(query)
+        .populate({
+          path: 'docenteId',
+          select: 'nombre apellidos email tipo estado',
+          model: 'Usuario',
+        })
+        .populate('cursoId', 'nombre grado grupo nivel jornada año_academico')
+        .sort({ nombre: 1 });
+
+      console.log(`Encontradas ${asignaturas.length} asignaturas no asignadas al curso`);
+
+      // Transformar datos para asegurar consistencia
+      const asignaturasFormateadas = asignaturas.map((asignatura) => {
+        const doc = asignatura.toObject();
+        return {
+          ...doc,
+          docente: doc.docenteId,
+        };
+      });
+
+      res.json({
+        success: true,
+        data: asignaturasFormateadas,
+      });
+    } catch (error) {
+      console.error('Error en obtenerNoAsignadasACurso:', error);
       next(error);
     }
   }

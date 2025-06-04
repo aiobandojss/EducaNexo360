@@ -8,6 +8,7 @@ import {
   forgotPasswordValidation,
   resetPasswordValidation,
 } from '../validations/auth.validation';
+import { authenticate } from '../middleware/auth.middleware';
 
 const router = express.Router();
 
@@ -52,5 +53,12 @@ router.post('/forgot-password', validate(forgotPasswordValidation), authControll
  * @access Public
  */
 router.post('/reset-password', validate(resetPasswordValidation), authController.resetPassword);
+
+/**
+ * @route GET /api/auth/verify-token
+ * @desc Verificar validez del token y devolver información del usuario
+ * @access Private (requiere token válido)
+ */
+router.get('/verify-token', authenticate, authController.verifyToken);
 
 export default router;

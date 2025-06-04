@@ -84,7 +84,7 @@ export const crearSolicitudRegistroValidation = [
     .isMongoId()
     .withMessage('ID de curso inválido'),
   body('estudiantes.*.email')
-    .optional()
+    .optional({ checkFalsy: true })
     .trim()
     .isEmail()
     .withMessage('Formato de email de estudiante inválido')

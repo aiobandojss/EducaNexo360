@@ -6,9 +6,27 @@ export const configureSecurityMiddleware = (app: Express) => {
   // Configuración básica de Helmet
   app.use(helmet());
 
-  // Configuración de CORS
+  // Configuración de CORS - Modificada para incluir el dominio de Vercel
   const corsOptions = {
-    origin: process.env.ALLOWED_ORIGINS?.split(',') || ['http://localhost:3000'],
+    origin: function (origin: string | undefined, callback: any) {
+      const allowedDomains = [
+        'http://localhost:3000',
+        'http://localhost:3001',
+        'https://educanexo360.creativebycode.com',
+        'https://www.educanexo360.creativebycode.com',
+        'https://educa-nexo360-react.vercel.app',
+      ];
+
+      // Permitir solicitudes sin origen (como Postman)
+      if (!origin) return callback(null, true);
+
+      if (allowedDomains.indexOf(origin) !== -1) {
+        callback(null, true);
+      } else {
+        console.log(`Origen bloqueado por CORS: ${origin}`);
+        callback(null, true); // Temporalmente permitimos todos para diagnóstico
+      }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],

@@ -79,34 +79,18 @@ class CalendarioController {
 
       // Procesar fechas - MODIFICADO para mejor manejo de zonas horarias
       if (eventoData.fechaInicio) {
-        // Preservar la fecha tal como viene, sin manipularla
         eventoData.fechaInicio = new Date(eventoData.fechaInicio);
-
-        // Log para depuración
         console.log(`Fecha inicio recibida: ${eventoData.fechaInicio}`);
         console.log(`Fecha inicio procesada: ${new Date(eventoData.fechaInicio).toISOString()}`);
-        console.log(
-          `Fecha inicio día/mes: ${new Date(eventoData.fechaInicio).getDate()}/${
-            new Date(eventoData.fechaInicio).getMonth() + 1
-          }`,
-        );
       }
 
       if (eventoData.fechaFin) {
-        // Preservar la fecha tal como viene, sin manipularla
         eventoData.fechaFin = new Date(eventoData.fechaFin);
-
-        // Log para depuración
         console.log(`Fecha fin recibida: ${eventoData.fechaFin}`);
         console.log(`Fecha fin procesada: ${new Date(eventoData.fechaFin).toISOString()}`);
-        console.log(
-          `Fecha fin día/mes: ${new Date(eventoData.fechaFin).getDate()}/${
-            new Date(eventoData.fechaFin).getMonth() + 1
-          }`,
-        );
       }
 
-      // Procesar invitados - se mantiene por compatibilidad, pero no se usará para enviar notificaciones
+      // Procesar invitados
       if (eventoData.invitados && typeof eventoData.invitados === 'string') {
         try {
           eventoData.invitados = JSON.parse(eventoData.invitados);
@@ -130,8 +114,6 @@ class CalendarioController {
         .populate('creadorId', 'nombre apellidos email tipo')
         .populate('cursoId', 'nombre nivel');
 
-      // Ya no se envían notificaciones automáticas a los invitados ni a los estudiantes del curso
-
       res.status(201).json({
         success: true,
         data: eventoPopulado,
@@ -141,8 +123,7 @@ class CalendarioController {
     }
   }
 
-  // Obtener todos los eventos
-  // REEMPLAZAR COMPLETAMENTE el método obtenerEventos en calendario.controller.ts
+  // 🚨 FUNCIÓN PRINCIPAL MODIFICADA - Obtener eventos con filtrado automático
   async obtenerEventos(req: RequestWithUser, res: Response, next: NextFunction) {
     try {
       if (!req.user) {
@@ -151,8 +132,7 @@ class CalendarioController {
 
       const { inicio, fin, cursoId, tipo, estado } = req.query;
 
-      // DEBUGGING - Mostrar parámetros de consulta
-      console.log('DEPURACIÓN - Parámetros de consulta:', {
+      console.log('🔍 DEPURACIÓN - Parámetros de consulta:', {
         inicio,
         fin,
         cursoId,
@@ -163,10 +143,44 @@ class CalendarioController {
         escuelaId: req.user.escuelaId,
       });
 
-      // Construir la consulta base - solo incluir escuelaId inicialmente
+      // Construir la consulta base
       const pipeline: mongoose.PipelineStage[] = [
         { $match: { escuelaId: new mongoose.Types.ObjectId(req.user.escuelaId.toString()) } },
       ];
+
+      // 🚨 FILTRADO SIMPLIFICADO Y CLARO
+      if (
+        req.user.tipo === 'ESTUDIANTE' ||
+        req.user.tipo === 'PADRE' ||
+        req.user.tipo === 'ACUDIENTE'
+      ) {
+        // Estudiantes, padres y acudientes SOLO ven eventos ACTIVOS
+        pipeline.push({ $match: { estado: 'ACTIVO' } });
+        console.log('✅ Usuario estudiante/padre/acudiente - SOLO eventos ACTIVOS');
+      } else {
+        // Administradores y docentes
+        console.log('🔍 Filtro de estado recibido:', estado);
+
+        if (estado === 'ACTIVO') {
+          pipeline.push({ $match: { estado: 'ACTIVO' } });
+          console.log('✅ Filtrando: SOLO eventos ACTIVOS');
+        } else if (estado === 'PENDIENTE') {
+          pipeline.push({ $match: { estado: 'PENDIENTE' } });
+          console.log('✅ Filtrando: SOLO eventos PENDIENTES');
+        } else if (estado === 'CANCELADO') {
+          pipeline.push({ $match: { estado: 'CANCELADO' } });
+          console.log('✅ Filtrando: SOLO eventos CANCELADOS');
+        } else if (estado === 'ALL') {
+          // 🚨 CRÍTICO: NO aplicar NINGÚN filtro de estado para mostrar TODOS
+          console.log(
+            '✅ TODOS: Sin filtro de estado - Mostrando ACTIVOS + PENDIENTES + CANCELADOS',
+          );
+        } else {
+          // Por defecto (vacío o cualquier otra cosa): SOLO ACTIVOS
+          pipeline.push({ $match: { estado: 'ACTIVO' } });
+          console.log('✅ Por defecto: SOLO eventos ACTIVOS');
+        }
+      }
 
       // Aplicar filtros básicos
       if (cursoId) {
@@ -177,37 +191,28 @@ class CalendarioController {
         pipeline.push({ $match: { tipo: tipo } });
       }
 
-      if (estado) {
-        pipeline.push({ $match: { estado: estado } });
-      }
-
-      // Aplicar filtro de fechas - COMPLETAMENTE REESCRITO para mejor manejo de zonas horarias
+      // Aplicar filtro de fechas
       if (inicio || fin) {
         const fechaMatch: any = {};
 
-        // Si tenemos fecha de inicio, eventos que terminan después o durante la fecha
         if (inicio) {
           const fechaInicio = new Date(inicio as string);
           fechaMatch.fechaFin = { $gte: fechaInicio };
-
           console.log(`Filtro inicio: ${fechaInicio.toISOString()}`);
         }
 
-        // Si tenemos fecha de fin, eventos que comienzan antes o durante la fecha
         if (fin) {
           const fechaFin = new Date(fin as string);
           if (!fechaMatch.fechaInicio) fechaMatch.fechaInicio = {};
           fechaMatch.fechaInicio.$lte = fechaFin;
-
           console.log(`Filtro fin: ${fechaFin.toISOString()}`);
         }
 
         pipeline.push({ $match: fechaMatch });
-
         console.log('Filtro de fechas aplicado:', JSON.stringify(fechaMatch));
       }
 
-      // Aplicar filtros específicos según el rol SOLO después de los otros filtros
+      // Aplicar filtros específicos según el rol DESPUÉS de los filtros de estado
       if (req.user.tipo === 'ESTUDIANTE') {
         const cursos = await Curso.find({ estudiantes: req.user._id }).select<{
           _id: mongoose.Types.ObjectId;
@@ -241,17 +246,36 @@ class CalendarioController {
             ],
           },
         });
-      } else if (req.user.tipo === 'PADRE') {
-        // Lógica para padres (similar a la anterior)
-        // ...
-      }
-      // Los ADMIN ven todos los eventos sin restricciones adicionales
+      } else if (req.user.tipo === 'PADRE' || req.user.tipo === 'ACUDIENTE') {
+        // Obtener cursos de los hijos del padre/acudiente
+        const usuario = await Usuario.findById(req.user._id);
+        if (usuario && usuario.info_academica && usuario.info_academica.estudiantes_asociados) {
+          const estudiantesIds = usuario.info_academica.estudiantes_asociados;
+          const cursos = await Curso.find({
+            estudiantes: { $in: estudiantesIds },
+          }).select<{ _id: mongoose.Types.ObjectId }>('_id');
+          const cursoIds = cursos.map((c) => new mongoose.Types.ObjectId(c._id.toString()));
 
-      // Añadir ordenamiento y población
+          pipeline.push({
+            $match: {
+              $or: [
+                { cursoId: { $in: cursoIds } },
+                { cursoId: { $exists: false } },
+                { 'invitados.usuarioId': req.user._id },
+              ],
+            },
+          });
+        }
+      }
+      // Los ADMIN ven todos los eventos (respetando el filtro de estado aplicado arriba)
+
+      // Añadir ordenamiento
       pipeline.push({ $sort: { fechaInicio: 1 } });
 
-      // DEBUGGING - Mostrar pipeline completo
-      console.log('DEPURACIÓN - Pipeline completo:', JSON.stringify(pipeline, null, 2));
+      console.log(
+        '🔍 DEPURACIÓN - Pipeline con filtros aplicados:',
+        JSON.stringify(pipeline, null, 2),
+      );
 
       // Ejecutar la agregación
       const eventos = await EventoCalendario.aggregate(pipeline);
@@ -268,15 +292,15 @@ class CalendarioController {
       });
 
       // DEBUGGING - Mostrar resultados
-      console.log(`DEPURACIÓN - Eventos encontrados: ${eventos.length}`);
+      console.log(`✅ RESULTADO - Eventos encontrados: ${eventos.length}`);
       if (eventos.length > 0) {
-        console.log('DEPURACIÓN - Primer evento:', {
-          id: eventos[0]._id,
-          titulo: eventos[0].titulo,
-          inicio: eventos[0].fechaInicio,
-          fin: eventos[0].fechaFin,
-          estado: eventos[0].estado,
-        });
+        console.log(
+          '✅ RESULTADO - Estados de eventos:',
+          eventos.map((e) => ({ id: e._id, titulo: e.titulo, estado: e.estado })),
+        );
+      } else {
+        console.log('⚠️ RESULTADO - No se encontraron eventos');
+        console.log('⚠️ Pipeline usado:', JSON.stringify(pipeline, null, 2));
       }
 
       // Retornar resultados
@@ -309,13 +333,22 @@ class CalendarioController {
         throw new ApiError(404, 'Evento no encontrado');
       }
 
-      // Información de depuración
-      console.log('DEPURACIÓN - obtenerEventoPorId:');
-      console.log(`Evento ID: ${evento._id}`);
-      console.log(`fechaInicio (ISO): ${evento.fechaInicio}`);
-      console.log(`fechaInicio (objeto): ${new Date(evento.fechaInicio)}`);
-      console.log(`fechaFin (ISO): ${evento.fechaFin}`);
-      console.log(`todoElDia: ${evento.todoElDia}`);
+      // 🚨 CONTROL DE ACCESO: Estudiantes/padres solo ven eventos ACTIVOS
+      if (
+        (req.user.tipo === 'ESTUDIANTE' ||
+          req.user.tipo === 'PADRE' ||
+          req.user.tipo === 'ACUDIENTE') &&
+        evento.estado !== 'ACTIVO'
+      ) {
+        throw new ApiError(404, 'Evento no encontrado');
+      }
+
+      console.log('✅ Evento obtenido:', {
+        id: evento._id,
+        titulo: evento.titulo,
+        estado: evento.estado,
+        usuarioTipo: req.user.tipo,
+      });
 
       res.json({
         success: true,
@@ -350,31 +383,13 @@ class CalendarioController {
 
       const datosActualizacion: any = { ...req.body };
 
-      // Procesar fechas - MODIFICADO para mejor manejo de zonas horarias
+      // Procesar fechas
       if (datosActualizacion.fechaInicio) {
-        // Preservar la fecha tal como viene, sin manipularla
         datosActualizacion.fechaInicio = new Date(datosActualizacion.fechaInicio);
-
-        // Log para depuración
-        console.log(`Fecha inicio actualizada (recibida): ${datosActualizacion.fechaInicio}`);
-        console.log(
-          `Fecha inicio actualizada (procesada): ${new Date(
-            datosActualizacion.fechaInicio,
-          ).toISOString()}`,
-        );
       }
 
       if (datosActualizacion.fechaFin) {
-        // Preservar la fecha tal como viene, sin manipularla
         datosActualizacion.fechaFin = new Date(datosActualizacion.fechaFin);
-
-        // Log para depuración
-        console.log(`Fecha fin actualizada (recibida): ${datosActualizacion.fechaFin}`);
-        console.log(
-          `Fecha fin actualizada (procesada): ${new Date(
-            datosActualizacion.fechaFin,
-          ).toISOString()}`,
-        );
       }
 
       // Procesar invitados
@@ -436,7 +451,7 @@ class CalendarioController {
         }
       }
 
-      // Actualizar el evento y obtener la versión actualizada con los campos populados
+      // Actualizar el evento
       await EventoCalendario.findByIdAndUpdate(req.params.id, datosActualizacion, {
         new: true,
         runValidators: true,
@@ -453,8 +468,6 @@ class CalendarioController {
         throw new ApiError(404, 'Evento no encontrado');
       }
 
-      // Ya no se envían notificaciones de actualización
-
       res.json({
         success: true,
         data: eventoActualizado,
@@ -464,9 +477,13 @@ class CalendarioController {
     }
   }
 
-  // Eliminar (cancelar) un evento
+  // 🚨 FUNCIÓN MODIFICADA - Eliminar (cancelar) un evento
   async eliminarEvento(req: RequestWithUser, res: Response, next: NextFunction) {
     try {
+      console.log('🗑️ === INICIANDO CANCELACIÓN DE EVENTO ===');
+      console.log(`ID del evento: ${req.params.id}`);
+      console.log(`Usuario: ${req.user?.email} (${req.user?.tipo})`);
+
       if (!req.user) {
         throw new ApiError(401, 'No autorizado');
       }
@@ -478,43 +495,60 @@ class CalendarioController {
       });
 
       if (!evento) {
+        console.log('❌ Evento no encontrado en la base de datos');
         throw new ApiError(404, 'Evento no encontrado');
       }
 
+      console.log(`✅ Evento encontrado: "${evento.titulo}"`);
+      console.log(`Estado actual: ${evento.estado}`);
+
       // Solo el creador o un administrador puede eliminar el evento
       if (evento.creadorId.toString() !== req.user._id && req.user.tipo !== 'ADMIN') {
+        console.log('❌ Usuario sin permisos para eliminar');
         throw new ApiError(403, 'No tienes permiso para eliminar este evento');
       }
 
-      // Verificar si hay un archivo adjunto para eliminarlo
-      if (evento.archivoAdjunto && evento.archivoAdjunto.fileId) {
-        const bucket = gridfsManager.getBucket();
-        if (bucket) {
-          try {
-            await bucket.delete(
-              new mongoose.Types.ObjectId(evento.archivoAdjunto.fileId.toString()),
-            );
-          } catch (error) {
-            console.error('Error deleting file:', error);
-          }
-        }
+      // Verificar si ya está cancelado
+      if (evento.estado === 'CANCELADO') {
+        console.log('⚠️ El evento ya estaba cancelado');
+        throw new ApiError(400, 'El evento ya está cancelado');
       }
 
-      // Cambiar estado a cancelado en lugar de eliminar
+      // 🚨 CAMBIAR ESTADO A CANCELADO (mantener en BD para historial)
+      console.log('🔄 Cambiando estado del evento a CANCELADO...');
       const eventoActualizado = await EventoCalendario.findByIdAndUpdate(
         req.params.id,
-        { estado: EstadoEvento.CANCELADO },
+        {
+          estado: EstadoEvento.CANCELADO,
+          fechaCancelacion: new Date(),
+        },
         { new: true },
       );
 
-      // Ya no se envían notificaciones de cancelación
+      if (!eventoActualizado) {
+        console.log('❌ No se pudo cancelar el evento');
+        throw new ApiError(500, 'Error al cancelar el evento');
+      }
 
+      console.log('✅ EVENTO CANCELADO EXITOSAMENTE');
+      console.log(`Título: "${eventoActualizado.titulo}"`);
+      console.log(`Nuevo estado: ${eventoActualizado.estado}`);
+      console.log('🗑️ === CANCELACIÓN COMPLETADA ===');
+
+      // Respuesta de éxito
       res.json({
         success: true,
         message: 'Evento cancelado exitosamente',
-        data: eventoActualizado,
+        data: {
+          _id: eventoActualizado._id,
+          titulo: eventoActualizado.titulo,
+          estado: eventoActualizado.estado,
+          cancelado: true,
+          fechaCancelacion: new Date().toISOString(),
+        },
       });
     } catch (error) {
+      console.error('❌ ERROR al cancelar evento:', error);
       next(error);
     }
   }
@@ -563,8 +597,6 @@ class CalendarioController {
         throw new ApiError(500, 'Error al actualizar la confirmación');
       }
 
-      // Ya no se envían notificaciones de confirmación
-
       res.json({
         success: true,
         message: `Has confirmado tu asistencia al evento`,
@@ -599,7 +631,7 @@ class CalendarioController {
         throw new ApiError(404, 'Evento no encontrado');
       }
 
-      // Solo admins pueden cambiar el estado
+      // Solo admins y docentes pueden cambiar el estado
       if (req.user.tipo !== 'ADMIN' && req.user.tipo !== 'DOCENTE') {
         throw new ApiError(403, 'No tienes permiso para cambiar el estado de este evento');
       }

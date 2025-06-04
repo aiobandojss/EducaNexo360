@@ -8,14 +8,18 @@ export enum EstadoSolicitud {
   RECHAZADA = 'RECHAZADA',
 }
 
-// Interfaz para estudiante en solicitud
+// Interfaz para estudiante en solicitud - MEJORADA
 export interface IEstudianteSolicitud {
   nombre: string;
   apellidos: string;
   fechaNacimiento?: Date;
   cursoId: Types.ObjectId;
   codigo_estudiante?: string;
-  email?: string; // Nuevo campo opcional
+  email?: string;
+
+  // NUEVOS CAMPOS PARA MANEJAR ESTUDIANTES EXISTENTES
+  esExistente?: boolean; // Indica si es un estudiante que ya existe
+  estudianteExistenteId?: Types.ObjectId; // ID del estudiante existente si aplica
 }
 
 // Interfaz base para solicitud
@@ -101,6 +105,15 @@ const SolicitudRegistroSchema = new Schema<ISolicitudRegistro>(
           trim: true,
           lowercase: true,
         },
+        // NUEVOS CAMPOS
+        esExistente: {
+          type: Boolean,
+          default: false,
+        },
+        estudianteExistenteId: {
+          type: Schema.Types.ObjectId,
+          ref: 'Usuario',
+        },
       },
     ],
     estado: {
@@ -131,7 +144,7 @@ const SolicitudRegistroSchema = new Schema<ISolicitudRegistro>(
   },
   {
     timestamps: true,
-    collection: 'solicitudregistros', // Especificamos explícitamente el nombre de la colección
+    collection: 'solicitudregistros',
   },
 );
 

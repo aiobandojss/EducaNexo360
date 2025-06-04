@@ -264,22 +264,111 @@ export class MensajeController {
         throw new ApiError(403, 'No tiene permisos para guardar borradores');
       }
 
-      // Obtener datos del mensaje
+      // ===== DEBUG: Ver EXACTAMENTE qué llega =====
+      console.log('=== DEBUG DESTINATARIOS ===');
+      console.log('req.body completo:', JSON.stringify(req.body, null, 2));
+      console.log('req.files:', req.files ? req.files.length : 0);
+      console.log('Tipo de destinatarios:', typeof req.body.destinatarios);
+      console.log('Valor destinatarios:', req.body.destinatarios);
+      console.log('Es array destinatarios:', Array.isArray(req.body.destinatarios));
+
+      // ===== EXTRACCIÓN MEJORADA DE DESTINATARIOS =====
+      let destinatariosArray: string[] = [];
+      let destinatariosCcArray: string[] = [];
+
+      // Procesar destinatarios - manejo robusto para FormData y JSON
+      if (req.body.destinatarios) {
+        console.log('Procesando destinatarios...');
+
+        if (typeof req.body.destinatarios === 'string') {
+          try {
+            // Intentar parsear como JSON primero
+            destinatariosArray = JSON.parse(req.body.destinatarios);
+            console.log('Destinatarios parseados desde JSON:', destinatariosArray);
+          } catch (error) {
+            // Si falla, asumir que es un solo ID
+            destinatariosArray = [req.body.destinatarios];
+            console.log('Destinatarios como string único:', destinatariosArray);
+          }
+        } else if (Array.isArray(req.body.destinatarios)) {
+          destinatariosArray = req.body.destinatarios;
+          console.log('Destinatarios como array directo:', destinatariosArray);
+        } else {
+          console.log('Destinatarios en formato desconocido, usando array vacío');
+          destinatariosArray = [];
+        }
+      }
+
+      // Procesar destinatarios CC de manera similar
+      if (req.body.destinatariosCc) {
+        if (typeof req.body.destinatariosCc === 'string') {
+          try {
+            destinatariosCcArray = JSON.parse(req.body.destinatariosCc);
+          } catch (error) {
+            destinatariosCcArray = [req.body.destinatariosCc];
+          }
+        } else if (Array.isArray(req.body.destinatariosCc)) {
+          destinatariosCcArray = req.body.destinatariosCc;
+        }
+      }
+
+      console.log('Destinatarios finales (string array):', destinatariosArray);
+      console.log('Destinatarios CC finales (string array):', destinatariosCcArray);
+
+      // ===== CONVERSIÓN A OBJECTID CON DEBUG =====
+      const destinatariosObjectIds: mongoose.Types.ObjectId[] = [];
+      if (destinatariosArray.length > 0) {
+        console.log('Convirtiendo destinatarios a ObjectId...');
+
+        for (let i = 0; i < destinatariosArray.length; i++) {
+          const dest = destinatariosArray[i];
+          console.log(`Destinatario ${i}: "${dest}" (tipo: ${typeof dest})`);
+
+          if (dest && typeof dest === 'string' && dest.trim() !== '') {
+            if (mongoose.isValidObjectId(dest)) {
+              destinatariosObjectIds.push(new mongoose.Types.ObjectId(dest));
+              console.log(`✓ Destinatario ${i} válido agregado`);
+            } else {
+              console.log(`✗ Destinatario ${i} no es ObjectId válido: ${dest}`);
+            }
+          } else {
+            console.log(`✗ Destinatario ${i} vacío o inválido`);
+          }
+        }
+      }
+
+      const destinatariosCcObjectIds: mongoose.Types.ObjectId[] = [];
+      if (destinatariosCcArray.length > 0) {
+        for (const dest of destinatariosCcArray) {
+          if (dest && typeof dest === 'string' && mongoose.isValidObjectId(dest)) {
+            destinatariosCcObjectIds.push(new mongoose.Types.ObjectId(dest));
+          }
+        }
+      }
+
+      console.log('Destinatarios ObjectId finales:', destinatariosObjectIds.length);
+      console.log('Destinatarios CC ObjectId finales:', destinatariosCcObjectIds.length);
+
+      // ===== RESTO DE LA LÓGICA (sin cambios) =====
       const {
-        destinatarios,
-        destinatariosCc,
-        asunto,
-        contenido,
+        asunto = '(Sin asunto)',
+        contenido = '',
         prioridad = PrioridadMensaje.NORMAL,
-        etiquetas,
+        etiquetas = [],
       } = req.body;
 
-      // Verificar si es un borrador existente que se está actualizando
+      // Validar prioridad
+      const prioridadesValidas = ['ALTA', 'NORMAL', 'BAJA'];
+      const prioridadFinal = prioridadesValidas.includes(prioridad)
+        ? prioridad
+        : PrioridadMensaje.NORMAL;
+
+      // Verificar si es un borrador existente
       const borradorId = req.query.id || req.body.id;
       let borrador;
 
       if (borradorId && mongoose.isValidObjectId(borradorId)) {
-        // Verificar que el borrador existe y pertenece al usuario
+        // ===== ACTUALIZAR BORRADOR EXISTENTE =====
         borrador = await Mensaje.findOne({
           _id: borradorId,
           remitente: req.user._id,
@@ -290,57 +379,158 @@ export class MensajeController {
           throw new ApiError(404, 'Borrador no encontrado');
         }
 
-        // Actualizar el borrador existente
-        borrador.asunto = asunto || borrador.asunto;
-        borrador.contenido = contenido || borrador.contenido;
-        borrador.prioridad = prioridad || borrador.prioridad;
+        console.log(
+          'Actualizando borrador existente con destinatarios:',
+          destinatariosObjectIds.length,
+        );
 
-        // Solo actualizar destinatarios si se proporcionan
-        if (destinatarios && Array.isArray(destinatarios) && destinatarios.length > 0) {
-          borrador.destinatarios = destinatarios.map(
-            (id: string) => new mongoose.Types.ObjectId(id),
-          );
-        }
+        // Actualizar campos básicos
+        borrador.asunto = asunto;
+        borrador.contenido = contenido;
+        borrador.prioridad = prioridadFinal as any;
+        borrador.destinatarios = destinatariosObjectIds;
+        borrador.destinatariosCc = destinatariosCcObjectIds;
+        borrador.etiquetas = Array.isArray(etiquetas) ? etiquetas : [etiquetas].filter(Boolean);
 
-        // Solo actualizar destinatariosCc si se proporcionan
-        if (destinatariosCc && Array.isArray(destinatariosCc)) {
-          borrador.destinatariosCc = destinatariosCc.map(
-            (id: string) => new mongoose.Types.ObjectId(id),
-          );
-        }
-
-        // Actualizar etiquetas si se proporcionan
-        if (etiquetas) {
-          borrador.etiquetas = Array.isArray(etiquetas) ? etiquetas : [etiquetas];
-        }
-
-        // Manejar adjuntos si hay archivos nuevos
+        // ===== MANEJO MEJORADO DE ADJUNTOS =====
         if (req.files && req.files.length > 0) {
-          // Crear adjuntos si hay archivos
+          console.log('Se enviaron nuevos adjuntos, reemplazando adjuntos anteriores...');
+
+          // PASO 1: Eliminar adjuntos anteriores de GridFS (opcional, para limpiar espacio)
+          if (borrador.adjuntos && borrador.adjuntos.length > 0) {
+            const bucket = gridfsManager.getBucket();
+            if (bucket) {
+              console.log(`Eliminando ${borrador.adjuntos.length} adjuntos anteriores...`);
+              for (const adjuntoAnterior of borrador.adjuntos) {
+                try {
+                  await bucket.delete(adjuntoAnterior.fileId);
+                  console.log(`Adjunto eliminado: ${adjuntoAnterior.nombre}`);
+                } catch (deleteError) {
+                  console.warn(
+                    `No se pudo eliminar adjunto ${adjuntoAnterior.nombre}:`,
+                    deleteError,
+                  );
+                  // Continuar aunque falle la eliminación
+                }
+              }
+            }
+          }
+
+          // PASO 2: Procesar nuevos adjuntos
+          const nuevosAdjuntos = [];
+
+          const totalSize = req.files.reduce((sum, file) => sum + file.size, 0);
+          const MAX_TOTAL_SIZE = 15 * 1024 * 1024;
+
+          if (totalSize > MAX_TOTAL_SIZE) {
+            throw new ApiError(
+              400,
+              `El tamaño total de los archivos adjuntos no puede superar los 15MB`,
+            );
+          }
+
+          const bucket = gridfsManager.getBucket();
+          if (!bucket) {
+            throw new ApiError(500, 'Servicio de archivos no disponible');
+          }
+
+          for (const file of req.files) {
+            const filename = file.filename || path.basename(file.path);
+            const uploadStream = bucket.openUploadStream(filename, {
+              metadata: {
+                originalName: file.originalname,
+                contentType: file.mimetype,
+                size: file.size,
+                uploadedBy: req.user._id,
+              },
+            });
+
+            const fileContent = fs.readFileSync(file.path);
+            uploadStream.write(fileContent);
+            uploadStream.end();
+
+            nuevosAdjuntos.push({
+              nombre: file.originalname,
+              tipo: file.mimetype,
+              tamaño: file.size,
+              fileId: uploadStream.id,
+              fechaSubida: new Date(),
+            });
+
+            try {
+              fs.unlinkSync(file.path);
+            } catch (error) {
+              console.error('Error deleting temporary file:', error);
+            }
+          }
+
+          // PASO 3: REEMPLAZAR (no concatenar) los adjuntos
+          borrador.adjuntos = nuevosAdjuntos; // ← CAMBIO CLAVE: Reemplazar en lugar de concatenar
+          console.log(`Adjuntos reemplazados: ${nuevosAdjuntos.length} nuevos adjuntos`);
+        } else {
+          // Si no se enviaron nuevos archivos, mantener los adjuntos existentes
+          console.log(
+            'No se enviaron nuevos adjuntos, manteniendo adjuntos existentes:',
+            borrador.adjuntos?.length || 0,
+          );
+        }
+
+        await borrador.save();
+      } else {
+        // ===== CREAR NUEVO BORRADOR =====
+        console.log('Creando nuevo borrador con destinatarios:', destinatariosObjectIds.length);
+
+        // PASO 1: Crear borrador básico SIN adjuntos pero CON destinatarios
+        const borradorData = {
+          remitente: new mongoose.Types.ObjectId(req.user._id),
+          destinatarios: destinatariosObjectIds, // ← IMPORTANTE: Incluir aquí
+          destinatariosCc: destinatariosCcObjectIds, // ← IMPORTANTE: Incluir aquí
+          asunto,
+          contenido,
+          tipo: TipoMensaje.BORRADOR,
+          estado: EstadoMensaje.BORRADOR,
+          prioridad: prioridadFinal as any,
+          etiquetas: Array.isArray(etiquetas) ? etiquetas : [etiquetas].filter(Boolean),
+          escuelaId: new mongoose.Types.ObjectId(req.user.escuelaId),
+          adjuntos: [],
+        };
+
+        console.log('Datos para crear borrador:', {
+          ...borradorData,
+          destinatarios: `${borradorData.destinatarios.length} destinatarios`,
+          destinatariosCc: `${borradorData.destinatariosCc.length} destinatarios CC`,
+        });
+
+        const borradorBasico = await Mensaje.create(borradorData);
+
+        console.log('Borrador creado con ID:', borradorBasico._id);
+        console.log('Destinatarios guardados:', borradorBasico.destinatarios.length);
+
+        // PASO 2: Si hay adjuntos, procesarlos y actualizar el borrador
+        if (req.files && req.files.length > 0) {
+          console.log('Procesando adjuntos para borrador nuevo...');
+
           const adjuntos = [];
 
-          if (req.files && req.files.length > 0) {
-            // Verificación de tamaño total
-            const totalSize = req.files.reduce((sum, file) => sum + file.size, 0);
-            const MAX_TOTAL_SIZE = 15 * 1024 * 1024; // 15MB
+          const totalSize = req.files.reduce((sum, file) => sum + file.size, 0);
+          const MAX_TOTAL_SIZE = 15 * 1024 * 1024;
 
-            if (totalSize > MAX_TOTAL_SIZE) {
-              throw new ApiError(
-                400,
-                `El tamaño total de los archivos adjuntos no puede superar los 15MB (tamaño actual: ${(
-                  totalSize /
-                  (1024 * 1024)
-                ).toFixed(2)}MB)`,
-              );
-            }
+          if (totalSize > MAX_TOTAL_SIZE) {
+            await Mensaje.deleteOne({ _id: borradorBasico._id });
+            throw new ApiError(
+              400,
+              `El tamaño total de los archivos adjuntos no puede superar los 15MB`,
+            );
+          }
 
-            const bucket = gridfsManager.getBucket();
-            if (!bucket) {
-              throw new ApiError(500, 'Servicio de archivos no disponible');
-            }
+          const bucket = gridfsManager.getBucket();
+          if (!bucket) {
+            await Mensaje.deleteOne({ _id: borradorBasico._id });
+            throw new ApiError(500, 'Servicio de archivos no disponible');
+          }
 
+          try {
             for (const file of req.files) {
-              // Subir archivo a GridFS
               const filename = file.filename || path.basename(file.path);
               const uploadStream = bucket.openUploadStream(filename, {
                 metadata: {
@@ -363,108 +553,54 @@ export class MensajeController {
                 fechaSubida: new Date(),
               });
 
-              // Limpiar archivo temporal
               try {
                 fs.unlinkSync(file.path);
               } catch (error) {
                 console.error('Error deleting temporary file:', error);
               }
             }
-          }
 
-          // Añadir los nuevos adjuntos a los existentes
-          if (!borrador.adjuntos) {
-            borrador.adjuntos = [];
-          }
-          borrador.adjuntos = [...borrador.adjuntos, ...adjuntos];
-        }
-
-        await borrador.save();
-      } else {
-        // Crear un nuevo borrador
-        const nuevoBorrador = new Mensaje({
-          remitente: new mongoose.Types.ObjectId(req.user._id),
-          destinatarios: destinatarios
-            ? destinatarios.map((id: string) => new mongoose.Types.ObjectId(id))
-            : [],
-          destinatariosCc: destinatariosCc
-            ? destinatariosCc.map((id: string) => new mongoose.Types.ObjectId(id))
-            : [],
-          asunto: asunto || '(Sin asunto)',
-          contenido: contenido || '',
-          tipo: TipoMensaje.BORRADOR,
-          estado: EstadoMensaje.BORRADOR,
-          prioridad,
-          etiquetas: etiquetas ? (Array.isArray(etiquetas) ? etiquetas : [etiquetas]) : [],
-          escuelaId: new mongoose.Types.ObjectId(req.user.escuelaId),
-        });
-
-        // Crear adjuntos si hay archivos
-        const adjuntos = [];
-
-        if (req.files && req.files.length > 0) {
-          // Verificación de tamaño total
-          const totalSize = req.files.reduce((sum, file) => sum + file.size, 0);
-          const MAX_TOTAL_SIZE = 15 * 1024 * 1024; // 15MB
-
-          if (totalSize > MAX_TOTAL_SIZE) {
-            throw new ApiError(
-              400,
-              `El tamaño total de los archivos adjuntos no puede superar los 15MB (tamaño actual: ${(
-                totalSize /
-                (1024 * 1024)
-              ).toFixed(2)}MB)`,
-            );
-          }
-
-          const bucket = gridfsManager.getBucket();
-          if (!bucket) {
-            throw new ApiError(500, 'Servicio de archivos no disponible');
-          }
-
-          for (const file of req.files) {
-            // Subir archivo a GridFS
-            const filename = file.filename || path.basename(file.path);
-            const uploadStream = bucket.openUploadStream(filename, {
-              metadata: {
-                originalName: file.originalname,
-                contentType: file.mimetype,
-                size: file.size,
-                uploadedBy: req.user._id,
-              },
-            });
-
-            const fileContent = fs.readFileSync(file.path);
-            uploadStream.write(fileContent);
-            uploadStream.end();
-
-            adjuntos.push({
-              nombre: file.originalname,
-              tipo: file.mimetype,
-              tamaño: file.size,
-              fileId: uploadStream.id,
-              fechaSubida: new Date(),
-            });
-
-            // Limpiar archivo temporal
-            try {
-              fs.unlinkSync(file.path);
-            } catch (error) {
-              console.error('Error deleting temporary file:', error);
-            }
+            borradorBasico.adjuntos = adjuntos;
+            await borradorBasico.save();
+          } catch (adjuntosError) {
+            await Mensaje.deleteOne({ _id: borradorBasico._id });
+            throw adjuntosError;
           }
         }
 
-        nuevoBorrador.adjuntos = adjuntos;
-        borrador = await nuevoBorrador.save();
+        borrador = borradorBasico;
       }
+
+      console.log('=== ANTES DE POPULAR ===');
+      console.log('Borrador final destinatarios:', borrador.destinatarios.length);
+
+      // Poblar información para la respuesta
+      await borrador.populate([
+        { path: 'remitente', select: 'nombre apellidos email tipo' },
+        { path: 'destinatarios', select: 'nombre apellidos email tipo' },
+        { path: 'destinatariosCc', select: 'nombre apellidos email tipo' },
+      ]);
+
+      console.log('=== DESPUÉS DE POPULAR ===');
+      console.log('Borrador final destinatarios:', borrador.destinatarios.length);
 
       res.status(200).json({
         success: true,
         data: borrador,
         message: 'Borrador guardado correctamente',
       });
-    } catch (error) {
+    } catch (error: any) {
+      console.error('Error en guardarBorrador:', error);
+
+      if (error.name === 'ValidationError') {
+        const errors = Object.values(error.errors).map((err: any) => err.message);
+        return next(new ApiError(400, `Error de validación: ${errors.join(', ')}`));
+      }
+
+      if (error.name === 'CastError') {
+        return next(new ApiError(400, `Error de formato: ${error.message}`));
+      }
+
       next(error);
     }
   }
